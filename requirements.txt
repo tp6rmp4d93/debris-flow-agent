@@ -7,3 +7,8 @@ streamlit-folium
 streamlit
 boto3
 libsql-experimental
+fastapi
+uvicorn
+line-bot-sdk
+requests
+pydantic
