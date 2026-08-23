@@ -1,5 +1,3 @@
-geopandas
-fiona
 shapely
 pyproj
 folium
