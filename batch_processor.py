@@ -1,0 +1,10 @@
+class DebrisFlowReport(BaseModel):
+    stream_id: str = Field(description="土石流潛勢溪流編號，例如：DF001")
+    county: str = Field(description="所屬縣市")
+    township: str = Field(description="所屬鄉鎮市區")
+    villages: list[str] = Field(description="涵蓋村里清單")
+    latitude: float | None = Field(default=None, description="溪流或保全對象之 WGS84 緯度，例如 24.8732")
+    longitude: float | None = Field(default=None, description="溪流或保全對象之 WGS84 經度，例如 121.3654")
+    risk_level: str | None = Field(default="中潛勢", description="土石流潛勢等級，例如：高潛勢、中潛勢、低潛勢")
+    disaster_history: list[DisasterEvent] = Field(description="歷年災害事件")
+    demarcation_adjustments: str = Field(description="劃設沿革與調整情形")

@@ -1,0 +1,9 @@
+geopandas
+fiona
+shapely
+pyproj
+folium
+streamlit-folium
+streamlit
+boto3
+libsql-experimental
