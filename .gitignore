@@ -1,0 +1,16 @@
+# 忽略所有金鑰與設定檔
+.streamlit/secrets.toml
+.env
+*.pem
+*.key
+
+# 忽略本機 PDF 原始檔案與快取資料庫 (檔案已放 R2 與 Turso)
+pdf_reports/
+*.db
+*.sqlite
+turso_cache.db
+
+# 忽略 Python 暫存檔
+__pycache__/
+*.py[cod]
+.venv/
