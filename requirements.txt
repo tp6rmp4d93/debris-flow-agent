@@ -1,12 +1,6 @@
-shapely
-pyproj
-folium
-streamlit-folium
 streamlit
-boto3
-libsql-experimental
-fastapi
-uvicorn
-line-bot-sdk
+streamlit-folium
+folium
 requests
+boto3
 pydantic
