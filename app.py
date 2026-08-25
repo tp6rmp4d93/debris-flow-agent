@@ -5,6 +5,7 @@ import json
 from urllib.parse import quote
 
 import streamlit as st
+import pandas as pd
 import folium
 from folium.plugins import Fullscreen, MeasureControl
 from streamlit_folium import st_folium
