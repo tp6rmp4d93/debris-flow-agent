@@ -266,7 +266,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
                 },
                 {
                     "type": "text",
-                    "text": f"📍 {cty} {twn}（{v_str}）",
+                    "text": f"📍 {cty} {twn} {v_str}",
                     "size": "xs",
                     "color": "#FFFFFF",
                     "margin": "xs"
