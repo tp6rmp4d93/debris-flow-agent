@@ -254,8 +254,8 @@ if df_turso.empty:
     st.stop()
 
 # 檢索條件輸入區
+# --- 頂部條件篩選區 (已移除多餘的 filter-box div) ---
 with st.container():
-    st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     c_county, c_township, c_search = st.columns([1, 1, 2])
     
     all_counties = ["選擇縣市"] + sorted([c for c in df_turso["county"].dropna().unique() if c])
