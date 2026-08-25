@@ -8,3 +8,9 @@ fastapi
 uvicorn
 line-bot-sdk
 python-dotenv
+pandas
+geopandas
+shapely
+fiona
+toml
+google-generativeai
