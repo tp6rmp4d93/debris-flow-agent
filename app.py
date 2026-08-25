@@ -108,20 +108,13 @@ TURSO_TOKEN = get_secret("TURSO_AUTH_TOKEN")
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
 
 # -------------------------------------------------------------
-# 3. R2 智慧年份分群與預簽名安全下載
+# 3. R2 智慧年份分群與預簽名安全下載 (加強版)
 # -------------------------------------------------------------
 r2_clients_cache = {}
 
 def determine_storage_group(file_name, storage_group) -> str:
-    if storage_group is not None and not pd.isna(storage_group):
-        s_grp = str(storage_group).strip()
-        if s_grp and s_grp.lower() not in ["none", "nan", "null"]:
-            return s_grp
-
-    if not file_name or pd.isna(file_name):
-        return "R2_GRP_3"
-
-    fn = str(file_name).strip()
+    """優先以檔名年份精準導向對應的 R2 群組 (2014 -> R2_GRP_3)"""
+    fn = str(file_name or "").strip()
     year_match = re.search(r"^(19\d\d|20\d\d)", fn)
     if year_match:
         year = int(year_match.group(1))
@@ -130,7 +123,12 @@ def determine_storage_group(file_name, storage_group) -> str:
         elif 2011 <= year <= 2015: return "R2_GRP_3"
         elif 2016 <= year <= 2020: return "R2_GRP_4"
         else: return "R2_GRP_5"
-        
+
+    if storage_group and not pd.isna(storage_group):
+        s_grp = str(storage_group).strip()
+        if s_grp.lower() not in ["none", "nan", "null", ""]:
+            return s_grp
+
     return "R2_GRP_3"
 
 def get_r2_download_url(file_name, storage_group) -> str:
@@ -143,13 +141,34 @@ def get_r2_download_url(file_name, storage_group) -> str:
 
     grp = determine_storage_group(fn, storage_group)
 
-    sec_dict = st.secrets.get(grp, {}) if isinstance(st.secrets.get(grp), dict) else {}
-    account_id = sec_dict.get("ACCOUNT_ID") or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
-    access_key = sec_dict.get("ACCESS_KEY") or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
-    secret_key = sec_dict.get("SECRET_KEY") or get_secret(f"{grp}_SECRET_KEY") or get_secret("R2_SECRET_KEY")
-    bucket_name = sec_dict.get("BUCKET") or get_secret(f"{grp}_BUCKET") or get_secret("R2_BUCKET")
+    # 1. 取得 Secrets 區塊 (支援大小寫與巢狀結構)
+    sec_data = {}
+    if grp in st.secrets:
+        sec_data = st.secrets[grp]
+    elif grp.lower() in st.secrets:
+        sec_data = st.secrets[grp.lower()]
+    
+    # 2. 解析 Account ID / Access Key / Secret Key / Bucket
+    account_id = None
+    access_key = None
+    secret_key = None
+    bucket_name = None
+
+    if isinstance(sec_data, dict):
+        norm = {k.upper(): v for k, v in sec_data.items()}
+        account_id = norm.get("ACCOUNT_ID")
+        access_key = norm.get("ACCESS_KEY") or norm.get("ACCESS_KEY_ID")
+        secret_key = norm.get("SECRET_KEY") or norm.get("SECRET_ACCESS_KEY")
+        bucket_name = norm.get("BUCKET") or norm.get("BUCKET_NAME")
+
+    # 平鋪備援讀取
+    account_id = account_id or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
+    access_key = access_key or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
+    secret_key = secret_key or get_secret(f"{grp}_SECRET_KEY") or get_secret("R2_SECRET_KEY")
+    bucket_name = bucket_name or get_secret(f"{grp}_BUCKET") or get_secret("R2_BUCKET")
 
     if not all([account_id, access_key, secret_key, bucket_name]):
+        print(f"⚠️ R2 金鑰缺失：群組 {grp} 缺少設定 (account_id={bool(account_id)}, ak={bool(access_key)}, sk={bool(secret_key)}, bucket={bool(bucket_name)})")
         return ""
 
     try:
@@ -170,9 +189,10 @@ def get_r2_download_url(file_name, storage_group) -> str:
             Params={"Bucket": str(bucket_name).strip(), "Key": fn, "ResponseContentDisposition": disposition},
             ExpiresIn=900
         )
-    except Exception:
+    except Exception as e:
+        print(f"❌ R2 預簽名生成失敗 ({fn}): {e}")
         return ""
-
+        
 # -------------------------------------------------------------
 # 4. Turso 資料庫載入與快取
 # -------------------------------------------------------------
