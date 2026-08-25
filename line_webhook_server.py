@@ -177,7 +177,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
     # 歷年重大災害方塊
     disaster_boxes = []
     if all_disasters:
-        for d in all_disasters[:4]:  # 最多顯示 4 筆重大災害
+        for d in all_disasters[:8]:  # 最多顯示 8 筆重大災害
             yr = d.get("year", "歷史事件")
             rf = d.get("rainfall_info", "")
             dmg = d.get("scale_and_damage") or d.get("description", "無詳細災情紀錄")
