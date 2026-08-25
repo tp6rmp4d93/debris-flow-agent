@@ -132,11 +132,9 @@ def load_default_gis_layer(possible_paths=None) -> gpd.GeoDataFrame:
     """自動搜尋並載入專案儲存庫內的潛勢溪流圖層"""
     if possible_paths is None:
         possible_paths = [
-            "data/debris_streams.geojson",
-            "debris_streams.geojson",
-            "data/debris_streams.json",
-            "data/debris_streams.zip",
-            "debris_streams.zip"
+            "data/watershed1753_20260114_wgs84.geojson",
+            "data/debrisstream1753_20260113_wgs84.geojson",
+            "data/debris1753_20260114_wgs84.geojson",
         ]
     
     for path in possible_paths:
