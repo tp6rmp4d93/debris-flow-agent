@@ -104,7 +104,7 @@ TURSO_TOKEN = get_secret("TURSO_AUTH_TOKEN")
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
 
 # -------------------------------------------------------------
-# 3. R2 智慧年份分群與預簽名安全下載 (加強版)
+# 3. R2 智慧年份分群與預簽名安全下載 (強健解析 + 即時診斷)
 # -------------------------------------------------------------
 r2_clients_cache = {}
 
@@ -127,66 +127,93 @@ def determine_storage_group(file_name, storage_group) -> str:
 
     return "R2_GRP_3"
 
-def get_r2_download_url(file_name, storage_group) -> str:
+def get_r2_download_url(file_name, storage_group) -> tuple[str, str]:
+    """
+    生成 15 分鐘有效的 R2 預簽名下載 URL
+    回傳值：(download_url, error_message)
+    """
     if not file_name or pd.isna(file_name):
-        return ""
+        return "", "檔名為空"
         
     fn = str(file_name).strip()
     if not fn or fn.lower() in ["none", "nan", "null"]:
-        return ""
+        return "", "無效檔名"
 
     grp = determine_storage_group(fn, storage_group)
 
-    # 1. 取得 Secrets 區塊 (支援大小寫與巢狀結構)
-    sec_data = {}
-    if grp in st.secrets:
-        sec_data = st.secrets[grp]
-    elif grp.lower() in st.secrets:
-        sec_data = st.secrets[grp.lower()]
-    
-    # 2. 解析 Account ID / Access Key / Secret Key / Bucket
-    account_id = None
-    access_key = None
-    secret_key = None
-    bucket_name = None
+    # 1. 深度掃描 st.secrets (不分大小寫、支援區塊與平鋪)
+    account_id, access_key, secret_key, bucket_name = None, None, None, None
 
-    if isinstance(sec_data, dict):
-        norm = {k.upper(): v for k, v in sec_data.items()}
-        account_id = norm.get("ACCOUNT_ID")
-        access_key = norm.get("ACCESS_KEY") or norm.get("ACCESS_KEY_ID")
-        secret_key = norm.get("SECRET_KEY") or norm.get("SECRET_ACCESS_KEY")
-        bucket_name = norm.get("BUCKET") or norm.get("BUCKET_NAME")
+    # (A) 嘗試從巢狀區塊讀取 (如 [R2_GRP_3] 或 [r2_grp_3])
+    for g_key in [grp, grp.lower(), grp.upper()]:
+        if g_key in st.secrets:
+            sec_dict = st.secrets[g_key]
+            if isinstance(sec_dict, dict) or hasattr(sec_dict, "items"):
+                norm = {str(k).upper(): str(v).strip() for k, v in sec_dict.items()}
+                account_id = norm.get("ACCOUNT_ID")
+                access_key = norm.get("ACCESS_KEY") or norm.get("ACCESS_KEY_ID")
+                secret_key = norm.get("SECRET_KEY") or norm.get("SECRET_ACCESS_KEY")
+                bucket_name = norm.get("BUCKET") or norm.get("BUCKET_NAME")
+                if account_id and access_key and secret_key and bucket_name:
+                    break
 
-    # 平鋪備援讀取
-    account_id = account_id or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
-    access_key = access_key or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
-    secret_key = secret_key or get_secret(f"{grp}_SECRET_KEY") or get_secret("R2_SECRET_KEY")
-    bucket_name = bucket_name or get_secret(f"{grp}_BUCKET") or get_secret("R2_BUCKET")
-
+    # (B) 嘗試從平鋪變數讀取 (如 R2_GRP_3_ACCOUNT_ID 或 R2_ACCOUNT_ID)
     if not all([account_id, access_key, secret_key, bucket_name]):
-        print(f"⚠️ R2 金鑰缺失：群組 {grp} 缺少設定 (account_id={bool(account_id)}, ak={bool(access_key)}, sk={bool(secret_key)}, bucket={bool(bucket_name)})")
-        return ""
+        account_id = account_id or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
+        access_key = access_key or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
+        secret_key = secret_key or get_secret(f"{grp}_SECRET_KEY") or get_secret("R2_SECRET_KEY")
+        bucket_name = bucket_name or get_secret(f"{grp}_BUCKET") or get_secret("R2_BUCKET")
+
+    # (C) 備援：若仍缺少，嘗試抓取全域任何一組有效的 R2 金鑰
+    if not all([account_id, access_key, secret_key]):
+        for fallback_grp in ["R2_GRP_1", "R2_GRP_2", "R2_GRP_4", "R2_GRP_5"]:
+            if fallback_grp in st.secrets:
+                fb_sec = st.secrets[fallback_grp]
+                if isinstance(fb_sec, dict) or hasattr(fb_sec, "items"):
+                    norm_fb = {str(k).upper(): str(v).strip() for k, v in fb_sec.items()}
+                    account_id = account_id or norm_fb.get("ACCOUNT_ID")
+                    access_key = access_key or norm_fb.get("ACCESS_KEY")
+                    secret_key = secret_key or norm_fb.get("SECRET_KEY")
+
+    # 預設 Bucket
+    if not bucket_name:
+        bucket_name = "debris-reports-2011-2015" if grp == "R2_GRP_3" else "debris-reports-2007"
+
+    # 若依然缺少必要金鑰，回報精確錯誤
+    if not all([account_id, access_key, secret_key, bucket_name]):
+        missing = []
+        if not account_id: missing.append("ACCOUNT_ID")
+        if not access_key: missing.append("ACCESS_KEY")
+        if not secret_key: missing.append("SECRET_KEY")
+        return "", f"Secrets 缺少群組【{grp}】的設定: {', '.join(missing)}"
 
     try:
-        if grp not in r2_clients_cache:
-            r2_clients_cache[grp] = boto3.client(
+        cache_key = f"{grp}_{account_id}"
+        if cache_key not in r2_clients_cache:
+            r2_clients_cache[cache_key] = boto3.client(
                 "s3",
                 endpoint_url=f"https://{str(account_id).strip()}.r2.cloudflarestorage.com",
                 aws_access_key_id=str(access_key).strip(),
                 aws_secret_access_key=str(secret_key).strip(),
+                region_name="auto",
                 config=Config(signature_version="s3v4")
             )
-        s3 = r2_clients_cache[grp]
+        s3 = r2_clients_cache[cache_key]
         encoded_fn = quote(fn)
         disposition = f"attachment; filename*=UTF-8''{encoded_fn}"
 
-        return s3.generate_presigned_url(
+        url = s3.generate_presigned_url(
             ClientMethod="get_object",
-            Params={"Bucket": str(bucket_name).strip(), "Key": fn, "ResponseContentDisposition": disposition},
+            Params={
+                "Bucket": str(bucket_name).strip(),
+                "Key": fn,
+                "ResponseContentDisposition": disposition
+            },
             ExpiresIn=900
         )
+        return url, ""
     except Exception as e:
-        print(f"❌ R2 預簽名生成失敗 ({fn}): {e}")
+        return "", f"R2 簽名失敗: {str(e)}"
         
 # -------------------------------------------------------------
 # 4. Turso 資料庫載入與快取
@@ -349,9 +376,7 @@ with tab1:
                 else:
                     st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
 
-# =============================================================
-# TAB 2: 調查報告 (依年度新至舊排序 + 15分鐘安全 PDF 下載)
-# =============================================================
+# --- TAB 2 渲染更新 ---
 with tab2:
     if not has_filter:
         st.markdown("""
@@ -369,7 +394,6 @@ with tab2:
 
         df_reports = filtered_df.copy()
         df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
-        # 依年度新至舊 (降冪)、編號 (升冪) 排序
         df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
 
         for idx, r in df_reports.iterrows():
@@ -379,7 +403,8 @@ with tab2:
             sid = r["stream_id"] or "未知編號"
             s_grp = r["storage_group"]
             
-            dl_url = get_r2_download_url(fname, s_grp)
+            # 取得下載網址與錯誤訊息
+            dl_url, err_msg = get_r2_download_url(fname, s_grp)
             
             c_info, c_btn = st.columns([3, 1])
             with c_info:
@@ -394,7 +419,9 @@ with tab2:
                 if dl_url:
                     st.link_button("⬇️ 下載 PDF", dl_url, type="primary")
                 else:
-                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}")
+                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}", help=err_msg)
+                    if err_msg:
+                        st.caption(f"<span style='color:#DC2626;font-size:11px;'>{err_msg}</span>", unsafe_allow_html=True)
             st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
 # =============================================================
