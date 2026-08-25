@@ -48,14 +48,24 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # -------------------------------------------------------------
-# 3. R2 智慧年份分群與預簽名下載 URL
+# 3. R2 智慧年份分群與預簽名下載 URL (已加入 NaN / Float 型態防護)
 # -------------------------------------------------------------
 r2_clients_cache = {}
 
-def determine_storage_group(file_name: str, storage_group: str) -> str:
-    if storage_group and storage_group.strip():
-        return storage_group.strip()
-    year_match = re.search(r"^(19\d\d|20\d\d)", file_name)
+def determine_storage_group(file_name, storage_group) -> str:
+    """自動判定所屬 R2 儲存桶群組 (容錯處理 NULL / NaN / 非字串)"""
+    # 檢查 storage_group 是否為有效字串
+    if storage_group is not None and not pd.isna(storage_group):
+        s_grp = str(storage_group).strip()
+        if s_grp and s_grp.lower() not in ["none", "nan", "null"]:
+            return s_grp
+
+    # 檢查 file_name 是否有效
+    if not file_name or pd.isna(file_name):
+        return "R2_GRP_3"
+
+    fn = str(file_name).strip()
+    year_match = re.search(r"^(19\d\d|20\d\d)", fn)
     if year_match:
         year = int(year_match.group(1))
         if year <= 2007: return "R2_GRP_1"
@@ -63,13 +73,21 @@ def determine_storage_group(file_name: str, storage_group: str) -> str:
         elif 2011 <= year <= 2015: return "R2_GRP_3"
         elif 2016 <= year <= 2020: return "R2_GRP_4"
         else: return "R2_GRP_5"
+        
     return "R2_GRP_3"
 
-def get_r2_download_url(file_name: str, storage_group: str) -> str:
-    if not file_name:
+def get_r2_download_url(file_name, storage_group) -> str:
+    """生成 15 分鐘有效的 R2 預簽名下載 URL"""
+    if not file_name or pd.isna(file_name):
         return ""
-    grp = determine_storage_group(file_name, storage_group)
+        
+    fn = str(file_name).strip()
+    if not fn or fn.lower() in ["none", "nan", "null"]:
+        return ""
 
+    grp = determine_storage_group(fn, storage_group)
+
+    # 兼容 [R2_GRP_X] 巢狀與平鋪環境變數
     sec_dict = st.secrets.get(grp, {}) if isinstance(st.secrets.get(grp), dict) else {}
     account_id = sec_dict.get("ACCOUNT_ID") or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
     access_key = sec_dict.get("ACCESS_KEY") or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
@@ -83,21 +101,26 @@ def get_r2_download_url(file_name: str, storage_group: str) -> str:
         if grp not in r2_clients_cache:
             r2_clients_cache[grp] = boto3.client(
                 "s3",
-                endpoint_url=f"https://{account_id.strip()}.r2.cloudflarestorage.com",
-                aws_access_key_id=access_key.strip(),
-                aws_secret_access_key=secret_key.strip(),
+                endpoint_url=f"https://{str(account_id).strip()}.r2.cloudflarestorage.com",
+                aws_access_key_id=str(access_key).strip(),
+                aws_secret_access_key=str(secret_key).strip(),
                 config=Config(signature_version="s3v4")
             )
         s3 = r2_clients_cache[grp]
-        encoded_fn = quote(file_name)
+        encoded_fn = quote(fn)
         disposition = f"attachment; filename*=UTF-8''{encoded_fn}"
 
         return s3.generate_presigned_url(
             ClientMethod="get_object",
-            Params={"Bucket": bucket_name.strip(), "Key": file_name, "ResponseContentDisposition": disposition},
+            Params={
+                "Bucket": str(bucket_name).strip(),
+                "Key": fn,
+                "ResponseContentDisposition": disposition
+            },
             ExpiresIn=900
         )
-    except Exception:
+    except Exception as e:
+        print(f"R2 下載連結生成失敗 ({fn}): {e}")
         return ""
 
 # -------------------------------------------------------------
