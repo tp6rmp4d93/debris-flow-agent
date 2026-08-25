@@ -2,13 +2,9 @@ import os
 import io
 import re
 import json
-import zipfile
-import tempfile
 from urllib.parse import quote
 
 import streamlit as st
-import pandas as pd
-import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen, MeasureControl
 from streamlit_folium import st_folium
@@ -49,7 +45,6 @@ st.markdown("""
     .sub-title {
         font-size: 13px;
         color: #64748B;
-        margin-bottom: 14px;
     }
     .filter-box {
         background: #F8FAFC;
