@@ -191,7 +191,6 @@ def get_r2_download_url(file_name, storage_group) -> str:
         )
     except Exception as e:
         print(f"❌ R2 預簽名生成失敗 ({fn}): {e}")
-        return ""
         
 # -------------------------------------------------------------
 # 4. Turso 資料庫載入與快取
