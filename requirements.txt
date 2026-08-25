@@ -4,3 +4,7 @@ folium
 requests
 boto3
 pydantic
+fastapi
+uvicorn
+line-bot-sdk
+python-dotenv
