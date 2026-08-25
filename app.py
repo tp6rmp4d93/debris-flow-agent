@@ -17,18 +17,81 @@ import boto3
 from botocore.config import Config
 import google.generativeai as genai
 
+# -------------------------------------------------------------
+# 1. 頁面配置與行動裝置響應式樣式
+# -------------------------------------------------------------
+st.set_page_config(
+    page_title="土石流潛勢溪流調查Agent",
+    page_icon="⛰️",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# -------------------------------------------------------------
-# 1. 頁面配置與 Secrets
-# -------------------------------------------------------------
-st.set_page_config(page_title="土石流潛勢溪流 Agent", page_icon="⛰️", initial_sidebar_state="expanded")
-# 自訂 CSS 提升介面質感
+# 隱藏側邊欄與行動裝置優化 CSS
 st.markdown("""
 <style>
-    .main-title { font-size: 26px; font-weight: 700; color: #1E3A8A; margin-bottom: 5px; }
-    .sub-title { font-size: 14px; color: #4B5563; margin-bottom: 20px; }
-    .metric-card { background-color: #F8FAFC; border-left: 4px solid #2563EB; padding: 12px; border-radius: 6px; }
-    .stButton>button { width: 100%; border-radius: 6px; }
+    /* 完全隱藏側邊欄與開關按鈕 */
+    [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
+    }
+    .main .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2.5rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 1200px;
+    }
+    .main-title {
+        font-size: 22px;
+        font-weight: 800;
+        color: #1E3A8A;
+        margin-bottom: 2px;
+    }
+    .sub-title {
+        font-size: 13px;
+        color: #64748B;
+        margin-bottom: 15px;
+    }
+    .filter-box {
+        background: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        padding: 12px 14px 4px 14px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+    }
+    .card-item {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .disaster-badge {
+        background-color: #FEF2F2;
+        border-left: 3px solid #EF4444;
+        padding: 6px 10px;
+        border-radius: 4px;
+        margin-top: 5px;
+        margin-bottom: 5px;
+        font-size: 13px;
+    }
+    .year-tag {
+        background: #EFF6FF;
+        color: #1D4ED8;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 700;
+        font-size: 12px;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-size: 15px;
+        font-weight: 600;
+        padding: 8px 14px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,23 +107,17 @@ TURSO_URL = get_secret("TURSO_DATABASE_URL")
 TURSO_TOKEN = get_secret("TURSO_AUTH_TOKEN")
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
 # -------------------------------------------------------------
-# 3. R2 智慧年份分群與預簽名下載 URL (已加入 NaN / Float 型態防護)
+# 3. R2 智慧年份分群與預簽名安全下載
 # -------------------------------------------------------------
 r2_clients_cache = {}
 
 def determine_storage_group(file_name, storage_group) -> str:
-    """自動判定所屬 R2 儲存桶群組 (容錯處理 NULL / NaN / 非字串)"""
-    # 檢查 storage_group 是否為有效字串
     if storage_group is not None and not pd.isna(storage_group):
         s_grp = str(storage_group).strip()
         if s_grp and s_grp.lower() not in ["none", "nan", "null"]:
             return s_grp
 
-    # 檢查 file_name 是否有效
     if not file_name or pd.isna(file_name):
         return "R2_GRP_3"
 
@@ -77,7 +134,6 @@ def determine_storage_group(file_name, storage_group) -> str:
     return "R2_GRP_3"
 
 def get_r2_download_url(file_name, storage_group) -> str:
-    """生成 15 分鐘有效的 R2 預簽名下載 URL"""
     if not file_name or pd.isna(file_name):
         return ""
         
@@ -87,7 +143,6 @@ def get_r2_download_url(file_name, storage_group) -> str:
 
     grp = determine_storage_group(fn, storage_group)
 
-    # 兼容 [R2_GRP_X] 巢狀與平鋪環境變數
     sec_dict = st.secrets.get(grp, {}) if isinstance(st.secrets.get(grp), dict) else {}
     account_id = sec_dict.get("ACCOUNT_ID") or get_secret(f"{grp}_ACCOUNT_ID") or get_secret("R2_ACCOUNT_ID")
     access_key = sec_dict.get("ACCESS_KEY") or get_secret(f"{grp}_ACCESS_KEY") or get_secret("R2_ACCESS_KEY")
@@ -112,19 +167,14 @@ def get_r2_download_url(file_name, storage_group) -> str:
 
         return s3.generate_presigned_url(
             ClientMethod="get_object",
-            Params={
-                "Bucket": str(bucket_name).strip(),
-                "Key": fn,
-                "ResponseContentDisposition": disposition
-            },
+            Params={"Bucket": str(bucket_name).strip(), "Key": fn, "ResponseContentDisposition": disposition},
             ExpiresIn=900
         )
-    except Exception as e:
-        print(f"R2 下載連結生成失敗 ({fn}): {e}")
+    except Exception:
         return ""
 
 # -------------------------------------------------------------
-# 4. Turso 資料庫查詢與快取
+# 4. Turso 資料庫載入與快取
 # -------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
 def load_all_streams_from_turso():
@@ -148,18 +198,17 @@ def load_all_streams_from_turso():
         return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. GitHub 空間圖資自動載入與快取 (支援 GeoJSON / SHP)
+# 5. 空間圖資讀取 (GitHub data/ 目錄自動探測)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_default_gis_layer(possible_paths=None) -> gpd.GeoDataFrame:
-    """自動搜尋並載入專案儲存庫內的潛勢溪流圖層"""
-    if possible_paths is None:
-        possible_paths = [
-            "data/watershed1753_20260114_wgs84.geojson",
-            "data/debrisstream1753_20260113_wgs84.geojson",
-            "data/debris1753_20260114_wgs84.geojson",
-        ]
-    
+def load_default_gis_layer() -> gpd.GeoDataFrame:
+    possible_paths = [
+        "data/debris_streams.geojson",
+        "debris_streams.geojson",
+        "data/debris_streams.json",
+        "data/debris_streams.zip",
+        "debris_streams.zip"
+    ]
     for path in possible_paths:
         if os.path.exists(path):
             try:
@@ -175,107 +224,193 @@ def load_default_gis_layer(possible_paths=None) -> gpd.GeoDataFrame:
                 else:
                     gdf = gpd.read_file(path)
 
-                # 確保轉為 WGS84
                 if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
                     gdf = gdf.to_crs(epsg=4326)
                 elif gdf.crs is None:
                     gdf.set_crs(epsg=4326, inplace=True)
                 return gdf
-            except Exception as e:
-                print(f"載入 {path} 失敗: {e}")
+            except Exception:
                 continue
     return None
 
 # -------------------------------------------------------------
-# 6. 主頁面佈局
+# 6. AI 決策綜整分析 (Gemini 3.1 Flash-Lite + 快取保護)
 # -------------------------------------------------------------
-st.markdown('<div class="main-title">⛰️ 土石流潛勢溪流歷史調查與圖資決策平台</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">整合 GitHub 空間圖層、Turso 雲端資料庫、Gemini AI 災情沿革萃取與 R2 報告下載</div>', unsafe_allow_html=True)
+@st.cache_data(show_spinner=False, ttl=3600)
+def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
+    genai.configure(api_key=api_key)
+    # 使用輕量快速且配額寬裕的 3.1 Flash-Lite 模型
+    model = genai.GenerativeModel("gemini-3.1-flash-lite")
+    
+    prompt = f"""
+    你是一名資深的土石流防災與水土保持工程專家。請根據以下潛勢溪流的歷年調查紀錄，進行精準專業的統整分析：
+    
+    資料內容：
+    {sample_data_json}
+    
+    請依下列架構輸出繁體中文 Markdown 報告：
+    1. **歷年災害情勢與致災熱點分析**（統整重複致災溪流、誘發雨量特徵與保全受損）
+    2. **劃設等級調整歷程趨勢**（探討等級提升、範圍調整或新增溪流的主因）
+    3. **後續巡勘與工程治理建議**（提供具體防減災對策）
+    """
+    for attempt in range(3):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except ResourceExhausted:
+            if attempt < 2:
+                time.sleep(10)
+                continue
+            raise
+        except Exception as e:
+            raise e
 
-# 載入 Turso 資料
+# -------------------------------------------------------------
+# 7. 主頁面佈局開始
+# -------------------------------------------------------------
+st.markdown('<div class="main-title">⛰️ 土石流潛勢溪流調查Agent</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">歷史調查報告檢索 ｜ 劃設沿革與重大災情 ｜ 空間圖資與 AI 決策分析</div>', unsafe_allow_html=True)
+
 df_turso = load_all_streams_from_turso()
 if df_turso.empty:
     st.info("💡 目前資料庫尚無資料，請先執行 `ai_batch_extractor.py` 進行資料萃取。")
     st.stop()
 
-# 側邊欄：圖資狀態與篩選
-with st.sidebar:
-    st.header("📂 空間圖層狀態")
-    gdf = load_default_gis_layer()
-    if gdf is not None:
-        st.success(f"🌐 已自動載入 GitHub 圖層\n（共 {len(gdf):,} 筆幾何）")
+# --- 頂部篩選器 (支援手機自動響應) ---
+with st.container():
+    st.markdown('<div class="filter-box">', unsafe_allow_html=True)
+    c_county, c_township, c_search = st.columns([1, 1, 2])
+    
+    all_counties = ["全部縣市"] + sorted([c for c in df_turso["county"].dropna().unique() if c])
+    with c_county:
+        sel_county = st.selectbox("所屬縣市", all_counties, label_visibility="collapsed")
+    
+    if sel_county != "全部縣市":
+        filtered_df = df_turso[df_turso["county"] == sel_county]
+        townships = ["全部鄉鎮"] + sorted([t for t in filtered_df["township"].dropna().unique() if t])
     else:
-        st.warning("⚠️ 儲存庫未檢測到 data/debris_streams.geojson")
-        uploaded_gis = st.file_uploader("手動上傳圖層 (ZIP/GeoJSON)", type=["zip", "geojson", "json"])
-        if uploaded_gis:
-            try:
-                if uploaded_gis.name.endswith(".zip"):
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        z_path = os.path.join(tmpdir, "up.zip")
-                        with open(z_path, "wb") as f: f.write(uploaded_gis.getbuffer())
-                        with zipfile.ZipFile(z_path, "r") as zr: zr.extractall(tmpdir)
-                        shps = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")]
-                        gdf = gpd.read_file(shps[0]) if shps else None
+        filtered_df = df_turso
+        townships = ["全部鄉鎮"] + sorted([t for t in df_turso["township"].dropna().unique() if t])
+
+    with c_township:
+        sel_township = st.selectbox("鄉鎮市區", townships, label_visibility="collapsed")
+        if sel_township != "全部鄉鎮":
+            filtered_df = filtered_df[filtered_df["township"] == sel_township]
+
+    with c_search:
+        search_kw = st.text_input("關鍵字搜尋", placeholder="輸入溪流編號 (如: 投縣DF135) 或村里名稱", label_visibility="collapsed")
+        if search_kw:
+            pat = search_kw.strip()
+            filtered_df = filtered_df[
+                filtered_df["stream_id"].str.contains(pat, case=False, na=False) |
+                filtered_df["villages"].str.contains(pat, case=False, na=False) |
+                filtered_df["file_name"].str.contains(pat, case=False, na=False)
+            ]
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# 簡明統計列
+st.caption(f"📊 篩選結果：共 **{len(filtered_df):,}** 筆調查紀錄（全台資料庫總計 {len(df_turso):,} 筆）")
+
+# -------------------------------------------------------------
+# 8. 三大主功能分頁
+# -------------------------------------------------------------
+tab1, tab2, tab3 = st.tabs([
+    "📋 調查資料 (沿革與災情)",
+    "📄 歷年調查報告 (溪流報告)",
+    "🗺️ 空間圖台與 AI 決策"
+])
+
+# =============================================================
+# TAB 1: 調查資料 (詳細沿革與歷年重大災害)
+# =============================================================
+with tab1:
+    if filtered_df.empty:
+        st.warning("查無符合條件之溪流調查資料。")
+    else:
+        for idx, r in filtered_df.iterrows():
+            sid = r["stream_id"] or "未編號溪流"
+            cty = r["county"] or ""
+            twn = r["township"] or ""
+            v_list = json.loads(r["villages"]) if r["villages"] and r["villages"].startswith("[") else []
+            v_str = "、".join(v_list) if v_list else "未載明村里"
+            adj = r["demarcation_adjustments"] or "無調整紀錄"
+            
+            with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}）", expanded=(len(filtered_df) == 1)):
+                st.markdown(f"**📐 劃設調整沿革**：\n{adj}")
+                
+                h_list = json.loads(r["disaster_history"]) if r["disaster_history"] and r["disaster_history"].startswith("[") else []
+                if h_list:
+                    st.markdown("**🕒 歷年重大災害情勢**：")
+                    for d in h_list:
+                        yr = d.get("year", "歷史災害")
+                        rf = d.get("rainfall_info", "")
+                        dmg = d.get("scale_and_damage") or d.get("description", "無詳細說明")
+                        
+                        rf_badge = f"<span style='color:#2563EB;font-size:12px;margin-left:8px;'>🌧️ 雨量：{rf}</span>" if (rf and rf != "未載明") else ""
+                        st.markdown(f"""
+                        <div class="disaster-badge">
+                            <b>🚨 {yr}</b>{rf_badge}<br>
+                            <span style="color:#334155;">{dmg}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
                 else:
-                    gdf = gpd.read_file(uploaded_gis)
-                if gdf is not None and gdf.crs and gdf.crs.to_epsg() != 4326:
-                    gdf = gdf.to_crs(epsg=4326)
-            except Exception as e:
-                st.error(f"上傳解析失敗: {e}")
+                    st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.header("🔍 條件篩選與檢索")
+# =============================================================
+# TAB 2: 調查報告 (依年度由新至舊排列 + 15分鐘 PDF 下載)
+# =============================================================
+with tab2:
+    if filtered_df.empty:
+        st.warning("查無符合條件之調查報告。")
+    else:
+        # 解析年份並依年度由新到舊排序
+        def parse_report_year(fn):
+            m = re.search(r"^(19\d\d|20\d\d)", str(fn))
+            return int(m.group(1)) if m else 0
 
-# 側邊欄篩選
-all_counties = ["全部縣市"] + sorted([c for c in df_turso["county"].dropna().unique() if c])
-sel_county = st.sidebar.selectbox("所屬縣市", all_counties)
+        df_reports = filtered_df.copy()
+        df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
+        # 依年度新至舊 (降冪)、溪流編號 (升冪) 排序
+        df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
 
-if sel_county != "全部縣市":
-    filtered_df = df_turso[df_turso["county"] == sel_county]
-    townships = ["全部鄉鎮"] + sorted([t for t in filtered_df["township"].dropna().unique() if t])
-else:
-    filtered_df = df_turso
-    townships = ["全部鄉鎮"] + sorted([t for t in df_turso["township"].dropna().unique() if t])
+        for idx, r in df_reports.iterrows():
+            yr = r["report_year"]
+            yr_display = f"{yr} 年" if yr > 0 else "調查年份未標明"
+            fname = r["file_name"]
+            sid = r["stream_id"] or "未知編號"
+            s_grp = r["storage_group"]
+            
+            dl_url = get_r2_download_url(fname, s_grp)
+            
+            c_info, c_btn = st.columns([3, 1])
+            with c_info:
+                st.markdown(f"""
+                <div style="padding-top:4px;">
+                    <span class="year-tag">📅 {yr_display}</span>
+                    <b style="font-size:15px; margin-left:6px; color:#1E293B;">【{sid}】</b> 
+                    <span style="color:#64748B; font-size:13px;">{fname}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with c_btn:
+                if dl_url:
+                    st.link_button("⬇️ 下載 PDF", dl_url, type="primary")
+                else:
+                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}")
+            st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
-sel_township = st.sidebar.selectbox("鄉鎮市區", townships)
-if sel_township != "全部鄉鎮":
-    filtered_df = filtered_df[filtered_df["township"] == sel_township]
-
-search_kw = st.sidebar.text_input("關鍵字搜尋 (編號 / 村里 / 檔名)", placeholder="如：投縣DF135、秀林里")
-if search_kw:
-    pat = search_kw.strip()
-    filtered_df = filtered_df[
-        filtered_df["stream_id"].str.contains(pat, case=False, na=False) |
-        filtered_df["villages"].str.contains(pat, case=False, na=False) |
-        filtered_df["file_name"].str.contains(pat, case=False, na=False)
-    ]
-
-# 頂部指標
-c1, c2, c3, c4 = st.columns(4)
-with c1: st.metric("資料庫報告總數", f"{len(df_turso):,} 筆")
-with c2: st.metric("篩選後筆數", f"{len(filtered_df):,} 筆")
-with c3: st.metric("涵蓋縣市數", f"{df_turso['county'].nunique()} 個")
-with c4:
-    has_disaster = df_turso["disaster_history"].apply(lambda x: len(json.loads(x)) if x and x.startswith("[") else 0)
-    st.metric("具災害紀錄溪流", f"{(has_disaster > 0).sum():,} 條")
-
-# -------------------------------------------------------------
-# 7. 主分頁規劃
-# -------------------------------------------------------------
-tab_map, tab_list, tab_ai = st.tabs(["🗺️ GIS 空間決策圖台", "📋 調查報告結構化清冊", "🤖 Gemini AI 決策綜整"])
-
-# --- TAB 1: GIS 空間地圖圖台 ---
-with tab_map:
-    # 建立 Folium 地圖
+# =============================================================
+# TAB 3: 空間圖台與 AI 決策 (地圖 + Gemini 決策綜整)
+# =============================================================
+with tab3:
+    gdf = load_default_gis_layer()
+    
+    st.markdown("##### 🗺️ 潛勢溪流空間圖台")
     m = folium.Map(location=[23.973875, 120.982024], zoom_start=8, tiles="CartoDB positron", control_scale=True)
     Fullscreen().add_to(m)
     MeasureControl(position="topleft").add_to(m)
 
     if gdf is not None and not gdf.empty:
-        # 自動識別編號欄位
         id_col = next((c for c in gdf.columns if any(k in c.upper() for k in ["NO", "ID", "編號", "STREAM", "NAME"])), gdf.columns[0])
-        
-        # 僅繪製符合篩選條件的幾何要素 (大幅加速渲染)
         target_ids = set(filtered_df["stream_id"].dropna().unique())
         
         for idx, row in gdf.iterrows():
@@ -283,12 +418,10 @@ with tab_map:
             if geom is None: continue
 
             stream_key = str(row[id_col]).strip()
-            # 若有設篩選且不在篩選清單內則跳過
             if target_ids and stream_key not in target_ids and len(target_ids) < len(df_turso):
                 continue
 
             db_match = df_turso[df_turso["stream_id"] == stream_key]
-            
             if not db_match.empty:
                 rec = db_match.iloc[0]
                 c_name = rec["county"] or ""
@@ -298,87 +431,60 @@ with tab_map:
                 s_grp = rec["storage_group"]
                 
                 dl_url = get_r2_download_url(fname, s_grp)
-                dl_btn = f'<a href="{dl_url}" target="_blank" style="display:inline-block;padding:5px 10px;background-color:#2563EB;color:white;text-decoration:none;border-radius:4px;font-size:12px;margin-top:6px;">📄 下載原始調查報告 (PDF)</a>' if dl_url else '<span style="color:#9CA3AF;font-size:12px;">⚠️ 無法取得下載連結</span>'
+                dl_btn = f'<a href="{dl_url}" target="_blank" style="display:inline-block;padding:4px 8px;background-color:#2563EB;color:white;text-decoration:none;border-radius:4px;font-size:11px;margin-top:6px;">📄 下載調查報告</a>' if dl_url else ''
 
                 popup_html = f"""
-                <div style="font-family:sans-serif; width:260px;">
-                    <h4 style="margin:0 0 5px 0; color:#1E3A8A;">📌 {stream_key}</h4>
-                    <p style="margin:0; font-size:12px; color:#4B5563;"><b>行政區：</b>{c_name} {t_name}</p>
-                    <p style="margin:4px 0; font-size:12px; color:#4B5563;"><b>劃設沿革：</b>{adj_text[:60]}...</p>
+                <div style="font-family:sans-serif; width:220px;">
+                    <h5 style="margin:0 0 4px 0; color:#1E3A8A;">📌 {stream_key}</h5>
+                    <div style="font-size:12px; color:#475569;"><b>行政區：</b>{c_name} {t_name}</div>
+                    <div style="font-size:11px; color:#64748B; margin-top:2px;"><b>沿革：</b>{adj_text[:40]}...</div>
                     {dl_btn}
                 </div>
                 """
                 color = "#DC2626"
             else:
-                popup_html = f"<b>{stream_key}</b><br><span style='color:#6B7280;'>（資料庫尚無調查報告）</span>"
+                popup_html = f"<b>{stream_key}</b>"
                 color = "#3B82F6"
 
             if geom.geom_type in ["LineString", "MultiLineString"]:
-                folium.GeoJson(geom, style_function=lambda x, col=color: {"color": col, "weight": 4, "opacity": 0.8}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=300)).add_to(m)
+                folium.GeoJson(geom, style_function=lambda x, col=color: {"color": col, "weight": 4, "opacity": 0.85}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
             elif geom.geom_type in ["Polygon", "MultiPolygon"]:
-                folium.GeoJson(geom, style_function=lambda x, col=color: {"fillColor": col, "color": col, "weight": 2, "fillOpacity": 0.4}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=300)).add_to(m)
+                folium.GeoJson(geom, style_function=lambda x, col=color: {"fillColor": col, "color": col, "weight": 2, "fillOpacity": 0.4}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
             elif geom.geom_type in ["Point", "MultiPoint"]:
-                folium.CircleMarker(location=[geom.y, geom.x], radius=6, color=color, fill=True, fillColor=color, popup=folium.Popup(popup_html, max_width=300)).add_to(m)
+                folium.CircleMarker(location=[geom.y, geom.x], radius=6, color=color, fill=True, fillColor=color, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
 
-        # 縮放至邊界
         try:
             bounds = gdf.total_bounds
             m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         except Exception:
             pass
 
-    st_folium(m, width="100%", height=620, returned_objects=[])
+    st_folium(m, width="100%", height=450, returned_objects=[])
 
-# --- TAB 2: 調查報告結構化清冊 ---
-with tab_list:
-    st.subheader(f"📋 溪流調查紀錄列表（共 {len(filtered_df)} 筆）")
-    for idx, r in filtered_df.iterrows():
-        with st.expander(f"📌 【{r['stream_id'] or '未編號'}】 {r['county']}{r['township']} - {r['file_name']}"):
-            col_l, col_r = st.columns([2, 1])
-            with col_l:
-                v_list = json.loads(r["villages"]) if r["villages"] and r["villages"].startswith("[") else []
-                st.markdown(f"**📍 涵蓋村里**：{'、'.join(v_list) if v_list else '未標明'}")
-                st.markdown(f"**📐 劃設沿革與等級調整**：\n{r['demarcation_adjustments'] or '無紀錄'}")
-                
-                h_list = json.loads(r["disaster_history"]) if r["disaster_history"] and r["disaster_history"].startswith("[") else []
-                if h_list:
-                    st.markdown("**🕒 歷年重大土石流災害**：")
-                    for d in h_list:
-                        yr = d.get("year", "歷史事件")
-                        desc = d.get("scale_and_damage") or d.get("description", "")
-                        rf = d.get("rainfall_info", "")
-                        st.markdown(f"- **{yr}**：{desc} " + (f"*(雨量: {rf})*" if rf else ""))
-                else:
-                    st.markdown("**🕒 歷年重大土石流災害**：無歷史災情紀錄")
-            with col_r:
-                st.markdown("**📄 報告檔案下載**")
-                dl_link = get_r2_download_url(r["file_name"], r["storage_group"])
-                if dl_link:
-                    st.link_button("⬇️ 下載原始調查報告 (PDF)", dl_link, type="primary")
-                    st.caption("⚡ 連結具備安全時效（15分鐘內有效）")
-                else:
-                    st.warning("無法取得下載網址")
-
-# --- TAB 3: Gemini AI 決策綜整 ---
-with tab_ai:
-    st.subheader("🤖 調查資料 AI 智慧決策摘要")
-    if st.button("✨ 生成當前篩選溪流之 AI 綜整分析報告", type="primary"):
+    st.markdown("---")
+    st.markdown("##### 🤖 Gemini AI 智慧決策摘要")
+    if st.button("✨ 生成當前篩選溪流之防救災與治理綜整報告", type="primary", use_container_width=True):
         if not GEMINI_API_KEY:
-            st.error("❌ 未設定 GEMINI_API_KEY")
+            st.error("❌ 未設定 GEMINI_API_KEY，請至 secrets.toml 設定。")
+        elif filtered_df.empty:
+            st.warning("⚠️ 目前條件下無任何溪流資料可供分析。")
         else:
-            with st.spinner("AI 正在彙整分析中..."):
-                sample_data = filtered_df[["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments"]].head(20).to_dict(orient="records")
-                prompt = f"""
-                你是一名資深的土石流防災與水土保持工程專家。請根據以下 {len(sample_data)} 筆潛勢溪流的歷年調查紀錄，進行專業統整報告：
-                {json.dumps(sample_data, ensure_ascii=False, indent=2)}
-                請依下列架構輸出繁體中文 Markdown 報告：
-                1. 歷年災害情勢與高風險區域特徵分析
-                2. 劃設等級調整歷史趨勢
-                3. 後續治理與巡勘精進建議
-                """
+            with st.spinner("Gemini 正在彙整分析歷年調查紀錄..."):
+                target_records = filtered_df[["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments"]].head(15).to_dict(orient="records")
+                stream_ids = tuple(filtered_df["stream_id"].head(15).tolist())
+                data_json_str = json.dumps(target_records, ensure_ascii=False)
+                
                 try:
-                    model = genai.GenerativeModel("gemini-3.6-flash")
-                    response = model.generate_content(prompt)
-                    st.markdown(response.text)
+                    result_text = generate_ai_summary_cached(stream_ids, data_json_str, GEMINI_API_KEY)
+                    st.markdown(result_text)
+                except ResourceExhausted:
+                    st.error("⏳ API 呼叫頻率已達免費上限，請稍候 1 分鐘後重試。")
                 except Exception as e:
                     st.error(f"AI 生成失敗: {e}")
+
+# -------------------------------------------------------------
+# 9. 頁尾極簡狀態列 (不起眼顯示於最下方)
+# -------------------------------------------------------------
+st.markdown("<br><hr style='margin: 20px 0 8px 0; border:0; border-top:1px solid #F1F5F9;'>", unsafe_allow_html=True)
+layer_status = f"已載入 GitHub 圖資 ({len(gdf):,} 筆)" if gdf is not None else "未檢測到空間圖層"
+st.caption(f"🌐 系統狀態：{layer_status} ｜ 資料庫：Turso 連線正常 ｜ 儲存庫：Cloudflare R2 5組分群就緒")
