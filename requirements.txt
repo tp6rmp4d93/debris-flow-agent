@@ -12,3 +12,4 @@ shapely
 fiona
 toml
 google-generativeai
+pandas
