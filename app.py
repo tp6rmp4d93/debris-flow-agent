@@ -27,10 +27,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 隱藏側邊欄與行動裝置優化 CSS
+# 隱藏側邊欄與行動裝置極簡排版
 st.markdown("""
 <style>
-    /* 完全隱藏側邊欄與開關按鈕 */
     [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
@@ -39,7 +38,7 @@ st.markdown("""
         padding-bottom: 2.5rem;
         padding-left: 1rem;
         padding-right: 1rem;
-        max-width: 1200px;
+        max-width: 1100px;
     }
     .main-title {
         font-size: 22px;
@@ -50,22 +49,14 @@ st.markdown("""
     .sub-title {
         font-size: 13px;
         color: #64748B;
-        margin-bottom: 15px;
+        margin-bottom: 14px;
     }
     .filter-box {
         background: #F8FAFC;
         border: 1px solid #E2E8F0;
         padding: 12px 14px 4px 14px;
         border-radius: 10px;
-        margin-bottom: 15px;
-    }
-    .card-item {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 10px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        margin-bottom: 12px;
     }
     .disaster-badge {
         background-color: #FEF2F2;
@@ -83,6 +74,15 @@ st.markdown("""
         border-radius: 4px;
         font-weight: 700;
         font-size: 12px;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        background: #F8FAFC;
+        border: 1px dashed #CBD5E1;
+        border-radius: 8px;
+        color: #64748B;
+        margin-top: 10px;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
@@ -191,55 +191,17 @@ def load_all_streams_from_turso():
         res = resp.json()["results"][0]["response"]["result"]
         cols = [c["name"] for c in res["cols"]]
         rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
-        df = pd.DataFrame(rows, columns=cols)
-        return df
+        return pd.DataFrame(rows, columns=cols)
     except Exception as e:
         st.error(f"Turso 資料庫連線失敗: {e}")
         return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. 空間圖資讀取 (GitHub data/ 目錄自動探測)
-# -------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_default_gis_layer() -> gpd.GeoDataFrame:
-    possible_paths = [
-        "data/debris_streams.geojson",
-        "debris_streams.geojson",
-        "data/debris_streams.json",
-        "data/debris_streams.zip",
-        "debris_streams.zip"
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            try:
-                if path.endswith(".zip"):
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        with zipfile.ZipFile(path, "r") as zip_ref:
-                            zip_ref.extractall(tmpdir)
-                        shp_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.lower().endswith(".shp")]
-                        if shp_files:
-                            gdf = gpd.read_file(shp_files[0])
-                        else:
-                            continue
-                else:
-                    gdf = gpd.read_file(path)
-
-                if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
-                    gdf = gdf.to_crs(epsg=4326)
-                elif gdf.crs is None:
-                    gdf.set_crs(epsg=4326, inplace=True)
-                return gdf
-            except Exception:
-                continue
-    return None
-
-# -------------------------------------------------------------
-# 6. AI 決策綜整分析 (Gemini 3.1 Flash-Lite + 快取保護)
+# 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
     genai.configure(api_key=api_key)
-    # 使用輕量快速且配額寬裕的 3.1 Flash-Lite 模型
     model = genai.GenerativeModel("gemini-3.1-flash-lite")
     
     prompt = f"""
@@ -266,26 +228,30 @@ def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
             raise e
 
 # -------------------------------------------------------------
-# 7. 主頁面佈局開始
+# 6. 主頁面與頂部條件篩選
 # -------------------------------------------------------------
-st.markdown('<div class="main-title">⛰️ 土石流潛勢溪流調查Agent</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">歷史調查報告檢索 ｜ 劃設沿革與重大災情 ｜ 空間圖資與 AI 決策分析</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">⛰️ 土石流潛勢溪流調查決策平台</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">歷史調查報告檢索 ｜ 劃設沿革與重大災情 ｜ AI 智慧決策綜整</div>', unsafe_allow_html=True)
 
 df_turso = load_all_streams_from_turso()
 if df_turso.empty:
-    st.info("💡 目前資料庫尚無資料，請先執行 `ai_batch_extractor.py` 進行資料萃取。")
+    st.info("💡 資料庫目前無資料，請先執行資料匯入。")
     st.stop()
 
-# --- 頂部篩選器 (支援手機自動響應) ---
+# 檢索條件輸入區
 with st.container():
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     c_county, c_township, c_search = st.columns([1, 1, 2])
     
-    all_counties = ["全部縣市"] + sorted([c for c in df_turso["county"].dropna().unique() if c])
+    all_counties = ["選擇縣市"] + sorted([c for c in df_turso["county"].dropna().unique() if c])
     with c_county:
         sel_county = st.selectbox("所屬縣市", all_counties, label_visibility="collapsed")
     
-    if sel_county != "全部縣市":
+    # 判斷是否啟動篩選
+    has_filter = False
+    
+    if sel_county != "選擇縣市":
+        has_filter = True
         filtered_df = df_turso[df_turso["county"] == sel_county]
         townships = ["全部鄉鎮"] + sorted([t for t in filtered_df["township"].dropna().unique() if t])
     else:
@@ -295,11 +261,13 @@ with st.container():
     with c_township:
         sel_township = st.selectbox("鄉鎮市區", townships, label_visibility="collapsed")
         if sel_township != "全部鄉鎮":
+            has_filter = True
             filtered_df = filtered_df[filtered_df["township"] == sel_township]
 
     with c_search:
         search_kw = st.text_input("關鍵字搜尋", placeholder="輸入溪流編號 (如: 投縣DF135) 或村里名稱", label_visibility="collapsed")
-        if search_kw:
+        if search_kw.strip():
+            has_filter = True
             pat = search_kw.strip()
             filtered_df = filtered_df[
                 filtered_df["stream_id"].str.contains(pat, case=False, na=False) |
@@ -308,24 +276,34 @@ with st.container():
             ]
     st.markdown('</div>', unsafe_allow_html=True)
 
-# 簡明統計列
-st.caption(f"📊 篩選結果：共 **{len(filtered_df):,}** 筆調查紀錄（全台資料庫總計 {len(df_turso):,} 筆）")
+# 狀態提示列
+if has_filter:
+    st.caption(f"📊 篩選結果：共 **{len(filtered_df):,}** 筆調查紀錄（全台資料庫總計 {len(df_turso):,} 筆）")
+else:
+    st.caption(f"📊 資料庫就緒（全台共 {len(df_turso):,} 筆紀錄），請設定上方條件開始檢索。")
 
 # -------------------------------------------------------------
-# 8. 三大主功能分頁
+# 7. 三大功能分頁
 # -------------------------------------------------------------
 tab1, tab2, tab3 = st.tabs([
     "📋 調查資料 (沿革與災情)",
-    "📄 歷年調查報告 (溪流報告)",
-    "🗺️ 空間圖台與 AI 決策"
+    "📄 調查報告 (歷年 PDF)",
+    "🤖 AI 智慧決策摘要"
 ])
 
 # =============================================================
-# TAB 1: 調查資料 (詳細沿革與歷年重大災害)
+# TAB 1: 調查資料 (沿革與災情)
 # =============================================================
 with tab1:
-    if filtered_df.empty:
-        st.warning("查無符合條件之溪流調查資料。")
+    if not has_filter:
+        st.markdown("""
+        <div class="empty-state">
+            <h4 style="margin:0 0 8px 0; color:#475569;">🔍 尚未選擇查詢條件</h4>
+            <p style="margin:0; font-size:14px;">請於上方選擇縣市、鄉鎮，或直接輸入溪流編號／村里名稱以調閱歷史調查資料。</p>
+        </div>
+        """, unsafe_allow_html=True)
+    elif filtered_df.empty:
+        st.warning("⚠️ 查無符合條件之溪流調查資料。")
     else:
         for idx, r in filtered_df.iterrows():
             sid = r["stream_id"] or "未編號溪流"
@@ -357,20 +335,26 @@ with tab1:
                     st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
 
 # =============================================================
-# TAB 2: 調查報告 (依年度由新至舊排列 + 15分鐘 PDF 下載)
+# TAB 2: 調查報告 (依年度新至舊排序 + 15分鐘安全 PDF 下載)
 # =============================================================
 with tab2:
-    if filtered_df.empty:
-        st.warning("查無符合條件之調查報告。")
+    if not has_filter:
+        st.markdown("""
+        <div class="empty-state">
+            <h4 style="margin:0 0 8px 0; color:#475569;">📄 尚未選擇查詢條件</h4>
+            <p style="margin:0; font-size:14px;">請於上方設定條件，系統將依年度由新至舊列出調查報告 PDF 與下載連結。</p>
+        </div>
+        """, unsafe_allow_html=True)
+    elif filtered_df.empty:
+        st.warning("⚠️ 查無符合條件之調查報告。")
     else:
-        # 解析年份並依年度由新到舊排序
         def parse_report_year(fn):
             m = re.search(r"^(19\d\d|20\d\d)", str(fn))
             return int(m.group(1)) if m else 0
 
         df_reports = filtered_df.copy()
         df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
-        # 依年度新至舊 (降冪)、溪流編號 (升冪) 排序
+        # 依年度新至舊 (降冪)、編號 (升冪) 排序
         df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
 
         for idx, r in df_reports.iterrows():
@@ -399,92 +383,39 @@ with tab2:
             st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
 # =============================================================
-# TAB 3: 空間圖台與 AI 決策 (地圖 + Gemini 決策綜整)
+# TAB 3: AI 智慧決策摘要
 # =============================================================
 with tab3:
-    gdf = load_default_gis_layer()
-    
-    st.markdown("##### 🗺️ 潛勢溪流空間圖台")
-    m = folium.Map(location=[23.973875, 120.982024], zoom_start=8, tiles="CartoDB positron", control_scale=True)
-    Fullscreen().add_to(m)
-    MeasureControl(position="topleft").add_to(m)
-
-    if gdf is not None and not gdf.empty:
-        id_col = next((c for c in gdf.columns if any(k in c.upper() for k in ["NO", "ID", "編號", "STREAM", "NAME"])), gdf.columns[0])
-        target_ids = set(filtered_df["stream_id"].dropna().unique())
-        
-        for idx, row in gdf.iterrows():
-            geom = row.geometry
-            if geom is None: continue
-
-            stream_key = str(row[id_col]).strip()
-            if target_ids and stream_key not in target_ids and len(target_ids) < len(df_turso):
-                continue
-
-            db_match = df_turso[df_turso["stream_id"] == stream_key]
-            if not db_match.empty:
-                rec = db_match.iloc[0]
-                c_name = rec["county"] or ""
-                t_name = rec["township"] or ""
-                adj_text = rec["demarcation_adjustments"] or "無調整紀錄"
-                fname = rec["file_name"]
-                s_grp = rec["storage_group"]
-                
-                dl_url = get_r2_download_url(fname, s_grp)
-                dl_btn = f'<a href="{dl_url}" target="_blank" style="display:inline-block;padding:4px 8px;background-color:#2563EB;color:white;text-decoration:none;border-radius:4px;font-size:11px;margin-top:6px;">📄 下載調查報告</a>' if dl_url else ''
-
-                popup_html = f"""
-                <div style="font-family:sans-serif; width:220px;">
-                    <h5 style="margin:0 0 4px 0; color:#1E3A8A;">📌 {stream_key}</h5>
-                    <div style="font-size:12px; color:#475569;"><b>行政區：</b>{c_name} {t_name}</div>
-                    <div style="font-size:11px; color:#64748B; margin-top:2px;"><b>沿革：</b>{adj_text[:40]}...</div>
-                    {dl_btn}
-                </div>
-                """
-                color = "#DC2626"
+    if not has_filter:
+        st.markdown("""
+        <div class="empty-state">
+            <h4 style="margin:0 0 8px 0; color:#475569;">🤖 尚未鎖定分析對象</h4>
+            <p style="margin:0; font-size:14px;">請於上方篩選特定區域或溪流後，點擊按鈕即可調用 Gemini AI 進行防救災與治理決策綜整。</p>
+        </div>
+        """, unsafe_allow_html=True)
+    elif filtered_df.empty:
+        st.warning("⚠️ 目前條件下無任何溪流資料可供分析。")
+    else:
+        st.markdown(f"##### 🤖 當前篩選範圍（共 {len(filtered_df)} 筆）之 AI 決策綜整")
+        if st.button("✨ 產生防救災與治理建議綜整報告", type="primary", use_container_width=True):
+            if not GEMINI_API_KEY:
+                st.error("❌ 未設定 GEMINI_API_KEY，請至 secrets.toml 設定。")
             else:
-                popup_html = f"<b>{stream_key}</b>"
-                color = "#3B82F6"
-
-            if geom.geom_type in ["LineString", "MultiLineString"]:
-                folium.GeoJson(geom, style_function=lambda x, col=color: {"color": col, "weight": 4, "opacity": 0.85}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
-            elif geom.geom_type in ["Polygon", "MultiPolygon"]:
-                folium.GeoJson(geom, style_function=lambda x, col=color: {"fillColor": col, "color": col, "weight": 2, "fillOpacity": 0.4}, tooltip=stream_key, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
-            elif geom.geom_type in ["Point", "MultiPoint"]:
-                folium.CircleMarker(location=[geom.y, geom.x], radius=6, color=color, fill=True, fillColor=color, popup=folium.Popup(popup_html, max_width=260)).add_to(m)
-
-        try:
-            bounds = gdf.total_bounds
-            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-        except Exception:
-            pass
-
-    st_folium(m, width="100%", height=450, returned_objects=[])
-
-    st.markdown("---")
-    st.markdown("##### 🤖 Gemini AI 智慧決策摘要")
-    if st.button("✨ 生成當前篩選溪流之防救災與治理綜整報告", type="primary", use_container_width=True):
-        if not GEMINI_API_KEY:
-            st.error("❌ 未設定 GEMINI_API_KEY，請至 secrets.toml 設定。")
-        elif filtered_df.empty:
-            st.warning("⚠️ 目前條件下無任何溪流資料可供分析。")
-        else:
-            with st.spinner("Gemini 正在彙整分析歷年調查紀錄..."):
-                target_records = filtered_df[["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments"]].head(15).to_dict(orient="records")
-                stream_ids = tuple(filtered_df["stream_id"].head(15).tolist())
-                data_json_str = json.dumps(target_records, ensure_ascii=False)
-                
-                try:
-                    result_text = generate_ai_summary_cached(stream_ids, data_json_str, GEMINI_API_KEY)
-                    st.markdown(result_text)
-                except ResourceExhausted:
-                    st.error("⏳ API 呼叫頻率已達免費上限，請稍候 1 分鐘後重試。")
-                except Exception as e:
-                    st.error(f"AI 生成失敗: {e}")
+                with st.spinner("Gemini 正在彙整分析歷年調查紀錄..."):
+                    target_records = filtered_df[["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments"]].head(15).to_dict(orient="records")
+                    stream_ids = tuple(filtered_df["stream_id"].head(15).tolist())
+                    data_json_str = json.dumps(target_records, ensure_ascii=False)
+                    
+                    try:
+                        result_text = generate_ai_summary_cached(stream_ids, data_json_str, GEMINI_API_KEY)
+                        st.markdown(result_text)
+                    except ResourceExhausted:
+                        st.error("⏳ API 呼叫頻率已達免費上限，請稍候 1 分鐘後重試。")
+                    except Exception as e:
+                        st.error(f"AI 生成失敗: {e}")
 
 # -------------------------------------------------------------
-# 9. 頁尾極簡狀態列 (不起眼顯示於最下方)
+# 8. 頁尾極簡狀態列 (不起眼顯示於最下方)
 # -------------------------------------------------------------
 st.markdown("<br><hr style='margin: 20px 0 8px 0; border:0; border-top:1px solid #F1F5F9;'>", unsafe_allow_html=True)
-layer_status = f"已載入 GitHub 圖資 ({len(gdf):,} 筆)" if gdf is not None else "未檢測到空間圖層"
-st.caption(f"🌐 系統狀態：{layer_status} ｜ 資料庫：Turso 連線正常 ｜ 儲存庫：Cloudflare R2 5組分群就緒")
+st.caption("🌐 系統狀態：Turso 雲端資料庫連線正常 ｜ Cloudflare R2 安全儲存庫就緒 ｜ 檢索模式：精簡一頁式")
