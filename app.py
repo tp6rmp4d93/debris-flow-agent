@@ -460,5 +460,4 @@ with tab3:
 # 8. 頁尾極簡狀態列 (不起眼顯示於最下方)
 # -------------------------------------------------------------
 st.markdown("<br><hr style='margin: 20px 0 8px 0; border:0; border-top:1px solid #F1F5F9;'>", unsafe_allow_html=True)
-st.caption("🌐 系統狀態：Turso 雲端資料庫連線正常 ｜ Cloudflare R2 安全儲存庫就緒 ｜ 檢索模式：精簡一頁式")
 st.caption("資料來源：農業部農村發展及水土保持署 ｜ 協力單位：財團法人中興工程顧問社")
