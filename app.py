@@ -13,6 +13,7 @@ import requests
 import boto3
 from botocore.config import Config
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 
 # -------------------------------------------------------------
 # 1. 頁面配置與行動裝置響應式樣式
