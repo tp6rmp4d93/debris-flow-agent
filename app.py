@@ -246,7 +246,7 @@ def load_all_streams_from_turso():
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-3.1-flash-lite")
+    model = genai.GenerativeModel("gemini-3.7-flash")
     
     prompt = f"""
     你是一名資深的土石流防災與水土保持工程專家。請根據以下潛勢溪流的歷年調查紀錄，進行精準專業的統整分析：
