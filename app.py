@@ -272,15 +272,15 @@ df["disaster_history"] = df["disaster_history"].fillna("").astype(str)
 
 
 payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
-try:
-    resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
-    res = resp.json()["results"][0]["response"]["result"]
-    cols = [c["name"] for c in res["cols"]]
-    rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
-return pd.DataFrame(rows, columns=cols)
-except Exception as e:
-    st.error(f"Turso 資料庫連線失敗: {e}")
-return pd.DataFrame()
+    try:
+        resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
+        res = resp.json()["results"][0]["response"]["result"]
+        cols = [c["name"] for c in res["cols"]]
+        rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
+        return pd.DataFrame(rows, columns=cols)  # 👈 這行往內縮排（與上方指令對齊）
+    except Exception as e:
+        st.error(f"Turso 資料庫連線失敗: {e}")
+        return pd.DataFrame()  # 👈 這行往內縮排（與 st.error 對齊）
 
 # -------------------------------------------------------------
 # 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
