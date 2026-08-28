@@ -499,11 +499,29 @@ with tab1:
                 
                 st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
                 
-                # 2. 歷年風險評估等級歷程 (置於劃設調整沿革正下方，由最新至最舊依序條列)
-                st.markdown("**📊 歷年風險評估等級歷程**：")
+                # 2. 歷年風險評估等級歷程 (前端即時過濾異動點 + 由新至舊朝左箭頭)
+                st.markdown("**📊 歷年風險評估等級異動歷程**：")
                 if r_history:
-                    sorted_r_history = sorted(r_history, key=lambda x: x.get("year", 0), reverse=True)
+                    # 1. 先按年份由小到大 (舊 -> 新) 正序掃描，找出首次劃設與異動點
+                    sorted_asc = sorted(r_history, key=lambda x: x.get("year", 0))
+                    change_records = []
+                    prev_risk = None
                     
+                    for item in sorted_asc:
+                        y = item.get("year")
+                        r_val = str(item.get("risk", "")).strip()
+                        if r_val and r_val.lower() not in ['nan', 'none', 'null', '']:
+                            if prev_risk is None:
+                                change_records.append({"year": y, "risk": r_val, "status": "首次公告劃設"})
+                                prev_risk = r_val
+                            elif r_val != prev_risk:
+                                change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
+                                prev_risk = r_val
+
+                    # 2. 轉為「由新至舊 (降冪)」倒序排列
+                    sorted_changes = sorted(change_records, key=lambda x: x["year"], reverse=True)
+
+                    # 3. 顏色標籤樣式
                     def get_risk_badge(r_val):
                         if "高" in r_val:
                             return f"<span style='background-color:#FEE2E2; color:#991B1B; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
@@ -514,10 +532,18 @@ with tab1:
                         else:
                             return f"<span style='background-color:#F1F5F9; color:#475569; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
 
-                    risk_items_html = " &nbsp; | &nbsp; ".join([
-                        f"<b>[{item.get('year')}]</b> {get_risk_badge(item.get('risk'))}" 
-                        for item in sorted_r_history
-                    ])
+                    items = []
+                    for item in sorted_changes:
+                        y = item["year"]
+                        r_name = item["risk"]
+                        status = item["status"]
+                        badge = get_risk_badge(r_name)
+                        status_tag = f"<span style='color:#64748B; font-size:11px; margin-left:4px;'>({status})</span>"
+                        items.append(f"<b>[{y}]</b> {badge}{status_tag}")
+
+                    # 4. 以「向左箭頭」連接（新年度在前 ⬅️ 舊年度在後）
+                    risk_items_html = " &nbsp; 🠔 &nbsp; ".join(items)
+
                     st.markdown(f"""
                     <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; line-height:2.0; font-size:13px;">
                         {risk_items_html}
@@ -525,8 +551,6 @@ with tab1:
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
-
-                st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
 
                 # 3. 歷年重大災害情勢
                 if h_list:
