@@ -287,36 +287,78 @@ def load_all_streams_data():
         st.error(f"❌ Turso 資料庫連線或讀取失敗: {e}")
         return pd.DataFrame()
 # -------------------------------------------------------------
-# 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
+# 5. Gemini AI 智慧決策摘要 (gemini-3.7-flash + 快取保護 + 指數退避重試)
 # -------------------------------------------------------------
-@st.cache_data(show_spinner=False, ttl=3600)
-def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-3.7-flash")
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def generate_ai_summary(stream_data_json_str: str) -> str:
+    """
+    調用 Gemini 3.7 Flash 進行潛勢溪流多維度決策綜整分析
+    (具備 Streamlit 快取機制與 429 配額防護)
+    """
+    if not GEMINI_API_KEY:
+        return "⚠️ 未設定 GEMINI_API_KEY，請於 Secrets 中配置後使用。"
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
-    你是一名資深的土石流防災與水土保持工程專家。請根據以下潛勢溪流的歷年調查紀錄，進行精準專業的統整分析：
-    
-    資料內容：
-    {sample_data_json}
-    
-    請依下列架構輸出繁體中文 Markdown 報告：
-    1. **歷年災害情勢與致災熱點分析**（統整重複致災溪流、誘發雨量特徵與保全受損）
-    2. **劃設等級調整歷程趨勢**（探討等級提升、範圍調整或新增溪流的主因）
-    3. **後續巡勘與工程治理建議**（提供具體防減災對策）
-    """
-for attempt in range(3):
-    try:
-        response = model.generate_content(prompt)
-    return response.text
-    except ResourceExhausted:
-        if attempt < 2:
-            time.sleep(10)
-            continue
-        raise
-    except Exception as e:
-        raise e
+    你是一名資深土石流防災與水土保持工程專家。
+請根據以下提供的土石流潛勢溪流調查數據（包含涵蓋村里、歷年劃設調整沿革、2010~2026年公告風險等級歷程、歷年重大災害情勢等），產出一份結構嚴謹、具工程實務參考價值的「專業決策綜整報告」。
 
+【溪流綜合調查數據】：
+{stream_data_json_str}
+
+請嚴格遵循以下 Markdown 結構輸出報告（繁體中文）：
+### 📌 溪流基本特性與風險態勢演變
+* 簡述溪流空間區位及保全對象範圍。
+* 深度解析 **2010~2026 年風險等級歷程** 的演變趨勢（若有升級、降級或維持，請指出其轉折年份與潛在背景）。
+
+### 📐 劃設調整與現地評估沿革分析
+* 梳理歷年各年度現勘評估與劃設線型修正重點（如溢流點、影響範圍或流路變更）。
+* 評估歷次調整說明的合理性與地形特徵符合程度。
+
+### 🚨 歷史致災情勢與降雨臨界關聯
+* 綜整歷史重大災害事件（如颱風豪雨名稱、溢淹規模、保全受損情形）。
+* 分析致災時之降雨特性（時雨量/累積雨量）與致災模式關聯性。
+
+### 💡 後續防減災與巡勘治理具體建議
+* **巡勘監測重點**：針對堆積扇、轉彎處、既有箱涵及保全住戶周邊提出巡勘優先建議。
+* **治理與應變對策**：提出工程清疏、導流或非工程警戒應變（如疏散避難機制）之精進建議。
+"""
+
+    # 指數退避等待秒數 (15s -> 30s -> 60s)
+    delays = [15, 30, 60]
+
+    for attempt in range(len(delays)):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.7-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=2500,
+                )
+            )
+            return response.text
+
+        except Exception as e:
+            err_msg = str(e)
+            # 捕捉 429 頻率限制、配額耗盡等例外
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                wait_sec = delays[attempt]
+                if attempt < len(delays) - 1:
+                    time.sleep(wait_sec)
+                    continue
+                else:
+                    return f"⏳ **API 請求頻率達到上限（429）**：系統已嘗試自動重試但仍受限，請稍候 1 分鐘後再點擊生成。"
+            else:
+                return f"❌ **AI 生成失敗**：{err_msg}"
+
+    return "⚠️ 決策報告生成異常，請重試。"
+    
 # -------------------------------------------------------------
 # 6. 主頁面與頂部條件篩選
 # -------------------------------------------------------------
