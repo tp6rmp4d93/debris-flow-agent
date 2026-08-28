@@ -433,14 +433,17 @@ with tab2:
     elif filtered_df.empty:
         st.warning("⚠️ 查無符合條件之調查報告。")
     else:
+        # 解析報告年份
         def parse_report_year(fn):
             m = re.search(r"^(19\d\d|20\d\d)", str(fn))
             return int(m.group(1)) if m else 0
 
         df_reports = filtered_df.copy()
         df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
-        # 依年度新至舊 (降冪)、編號 (升冪) 排序
+        # 依年度新至舊 (降冪)、溪流編號 (升冪) 排序
         df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
+
+        st.caption(f"📚 共找到 **{len(df_reports)}** 份相關調查報告（依年度由新至舊排列）")
 
         for idx, r in df_reports.iterrows():
             yr = r["report_year"]
@@ -449,7 +452,8 @@ with tab2:
             sid = r["stream_id"] or "未知編號"
             s_grp = r["storage_group"]
             
-            dl_url = get_r2_download_url(fname, s_grp)
+            # 取得 R2 下載網址與錯誤診斷
+            dl_url, err_msg = get_r2_download_url(fname, s_grp)
             
             c_info, c_btn = st.columns([3, 1])
             with c_info:
@@ -464,7 +468,9 @@ with tab2:
                 if dl_url:
                     st.link_button("⬇️ 下載 PDF", dl_url, type="primary")
                 else:
-                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}")
+                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}", help=err_msg)
+                    if err_msg:
+                        st.caption(f"<span style='color:#DC2626;font-size:11px;'>{err_msg}</span>", unsafe_allow_html=True)
             st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
             
 # =============================================================
