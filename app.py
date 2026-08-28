@@ -420,6 +420,54 @@ with tab1:
                     st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
 
 # =============================================================
+# TAB 2: 調查報告 (依年度新至舊排序 + 15分鐘安全 PDF 下載)
+# =============================================================
+with tab2:
+    if not has_filter:
+        st.markdown("""
+        <div class="empty-state">
+            <h4 style="margin:0 0 8px 0; color:#475569;">📄 尚未選擇查詢條件</h4>
+            <p style="margin:0; font-size:14px;">請於上方設定條件，系統將依年度由新至舊列出調查報告 PDF 與下載連結。</p>
+        </div>
+        """, unsafe_allow_html=True)
+    elif filtered_df.empty:
+        st.warning("⚠️ 查無符合條件之調查報告。")
+    else:
+        def parse_report_year(fn):
+            m = re.search(r"^(19\d\d|20\d\d)", str(fn))
+            return int(m.group(1)) if m else 0
+
+        df_reports = filtered_df.copy()
+        df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
+        # 依年度新至舊 (降冪)、編號 (升冪) 排序
+        df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
+
+        for idx, r in df_reports.iterrows():
+            yr = r["report_year"]
+            yr_display = f"{yr} 年" if yr > 0 else "調查年份未標明"
+            fname = r["file_name"]
+            sid = r["stream_id"] or "未知編號"
+            s_grp = r["storage_group"]
+            
+            dl_url = get_r2_download_url(fname, s_grp)
+            
+            c_info, c_btn = st.columns([3, 1])
+            with c_info:
+                st.markdown(f"""
+                <div style="padding-top:4px;">
+                    <span class="year-tag">📅 {yr_display}</span>
+                    <b style="font-size:15px; margin-left:6px; color:#1E293B;">【{sid}】</b> 
+                    <span style="color:#64748B; font-size:13px;">{fname}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with c_btn:
+                if dl_url:
+                    st.link_button("⬇️ 下載 PDF", dl_url, type="primary")
+                else:
+                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}")
+            st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
+            
+# =============================================================
 # TAB 3: AI 智慧決策摘要
 # =============================================================
 with tab3:
