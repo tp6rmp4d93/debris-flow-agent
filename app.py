@@ -271,7 +271,7 @@ df["risk_history"] = df["risk_history"].fillna("").astype(str)
 df["disaster_history"] = df["disaster_history"].fillna("").astype(str)    
 
 
-    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
+payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
     try:
         resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
         res = resp.json()["results"][0]["response"]["result"]
