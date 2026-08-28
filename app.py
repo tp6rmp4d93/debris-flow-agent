@@ -287,13 +287,13 @@ def load_all_streams_data():
         return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. Gemini AI 智慧決策摘要 (支援 503/429 重試 + 雙模型備援)
+# 5. Gemini AI 智慧決策摘要 (支援 503/429 重試 + 3.7 / 3.6 / 2.0 多模型備援)
 # -------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def generate_ai_summary(stream_data_json_str: str) -> str:
     """
     調用 Gemini 進行潛勢溪流多維度決策綜整分析
-    (具備 Streamlit 快取、429/503 自動退避重試與 gemini-2.5-flash 備援機制)
+    (具備 Streamlit 快取、429/503 自動退避重試與 gemini-3.6-flash / 2.0-flash 備援機制)
     """
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請於 Secrets 中配置後使用。"
@@ -325,9 +325,9 @@ def generate_ai_summary(stream_data_json_str: str) -> str:
 * **治理與應變對策**：提出工程清疏、導流或非工程警戒應變（如疏散避難機制）之精進建議。
 """
 
-    # 優先嘗試主要模型，若遇 503 尖峰則無縫切換備援模型
-    models_to_try = ["gemini-3.7-flash", "gemini-2.5-flash"]
-    delays = [3, 8, 15]
+    # 優先嘗試 3.7-flash，若遇 503 尖峰則依序自動切換 3.6-flash 與 2.0-flash
+    models_to_try = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.0-flash"]
+    delays = [3, 6, 12]
 
     last_error = ""
 
@@ -346,9 +346,9 @@ def generate_ai_summary(stream_data_json_str: str) -> str:
 
             except Exception as e:
                 err_msg = str(e)
-                last_error = err_msg
+                last_error = f"[{target_model}] {err_msg}"
                 
-                # 判斷是否為暫時性錯誤 (503 高負載、429 頻率限制、500/502 伺服器異常)
+                # 判斷是否為暫時性伺服器過載 (503/429/500/UNAVAILABLE)
                 is_transient = any(k in err_msg.lower() for k in [
                     "503", "unavailable", "high demand", 
                     "429", "resource_exhausted", "quota", 
@@ -359,10 +359,10 @@ def generate_ai_summary(stream_data_json_str: str) -> str:
                     time.sleep(wait_sec)
                     continue
                 else:
-                    # 當前模型重試失敗，跳出迴圈切換下一個備援模型
+                    # 若為 404 模型不存在或重試達上限，跳出切換下一個備援模型
                     break
 
-    return f"⏳ **Google API 伺服器忙碌中（503/429）**：目前官方伺服器負載較高，系統已嘗試重試與備援模型但仍受限，請稍候 30 秒至 1 分鐘後再次點擊生成。\n\n*(詳細錯誤: {last_error})*"
+    return f"⏳ **Google API 伺服器忙碌中（503/429）**：目前官方伺服器負載較高，系統已嘗試重試多個可用模型但仍受限，請稍候 30 秒後再次點擊生成。\n\n*(詳細錯誤: {last_error})*"
 
 # -------------------------------------------------------------
 # 6. 主頁面與頂部條件篩選
