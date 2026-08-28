@@ -277,10 +277,10 @@ try:
     res = resp.json()["results"][0]["response"]["result"]
     cols = [c["name"] for c in res["cols"]]
     rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
-    return pd.DataFrame(rows, columns=cols)
+return pd.DataFrame(rows, columns=cols)
 except Exception as e:
     st.error(f"Turso 資料庫連線失敗: {e}")
-    return pd.DataFrame()
+return pd.DataFrame()
 
 # -------------------------------------------------------------
 # 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
@@ -301,17 +301,17 @@ def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
     2. **劃設等級調整歷程趨勢**（探討等級提升、範圍調整或新增溪流的主因）
     3. **後續巡勘與工程治理建議**（提供具體防減災對策）
     """
-    for attempt in range(3):
-        try:
-            response = model.generate_content(prompt)
-            return response.text
-        except ResourceExhausted:
-            if attempt < 2:
-                time.sleep(10)
-                continue
-            raise
-        except Exception as e:
-            raise e
+for attempt in range(3):
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except ResourceExhausted:
+        if attempt < 2:
+            time.sleep(10)
+            continue
+        raise
+    except Exception as e:
+        raise e
 
 # -------------------------------------------------------------
 # 6. 主頁面與頂部條件篩選
