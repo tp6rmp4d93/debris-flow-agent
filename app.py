@@ -220,30 +220,72 @@ def get_r2_download_url(file_name, storage_group) -> tuple[str, str]:
 # -------------------------------------------------------------
 # 4. Turso 資料庫載入與快取
 # -------------------------------------------------------------
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner="正在自雲端資料庫載入潛勢溪流清冊...")
 def load_all_streams_data():
+    """從 Turso 雲端資料庫載入所有潛勢溪流清冊與歷年調查資料"""
+    if not TURSO_URL or not TURSO_TOKEN:
+        st.error("❌ 缺少 Turso 資料庫連線設定 (TURSO_DATABASE_URL 或 TURSO_AUTH_TOKEN)")
+        return pd.DataFrame()
+
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
     headers = {
         "Authorization": f"Bearer {TURSO_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
+    
+    # 查詢包含歷年沿革、災害歷史與風險等級歷程的 9 大核心欄位
     sql = """
-        SELECT stream_id, county, township, villages, disaster_history, 
-               demarcation_adjustments, file_name, storage_group, risk_history 
+        SELECT 
+            stream_id, 
+            county, 
+            township, 
+            villages, 
+            disaster_history, 
+            demarcation_adjustments, 
+            file_name, 
+            storage_group, 
+            risk_history 
         FROM streams;
     """
-    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
+    
+    payload = {
+        "requests": [
+            {"type": "execute", "stmt": {"sql": sql}},
+            {"type": "close"}
+        ]
+    }
     
     try:
-        resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
-        res = resp.json()["results"][0]["response"]["result"]
-        cols = [c["name"] for c in res["cols"]]
-        rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
-        return pd.DataFrame(rows, columns=cols)
-    except Exception as e:
-        st.error(f"Turso 資料庫連線失敗: {e}")
-        return pd.DataFrame()
+        resp = requests.post(http_url, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        
+        data_json = resp.json()
+        result = data_json["results"][0]["response"]["result"]
+        
+        # 動態取得資料庫回傳的欄位名稱
+        cols = [c["name"] for c in result.get("cols", [])]
+        rows = [[c.get("value") for c in r] for r in result.get("rows", [])]
+        
+        if not rows:
+            return pd.DataFrame(columns=cols)
+            
+        df = pd.DataFrame(rows, columns=cols)
+        
+        # 欄位防呆處理：填補空值為空字串並轉為文字型態
+        str_columns = [
+            "stream_id", "county", "township", "villages", 
+            "disaster_history", "demarcation_adjustments", 
+            "file_name", "storage_group", "risk_history"
+        ]
+        for col in str_columns:
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+                
+        return df
 
+    except Exception as e:
+        st.error(f"❌ Turso 資料庫連線或讀取失敗: {e}")
+        return pd.DataFrame()
 # -------------------------------------------------------------
 # 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
 # -------------------------------------------------------------
