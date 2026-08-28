@@ -227,8 +227,50 @@ def load_all_streams_from_turso():
 
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
     headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
-    sql = "SELECT file_name, stream_id, county, township, villages, demarcation_adjustments, file_name, storage_group, risk_history FROM streams;"
-    
+# -------------------------------------------------------------
+# 1. 確保 SQL 查詢包含所有 9 個標準欄位
+# -------------------------------------------------------------
+sql = """
+    SELECT 
+        stream_id, 
+        county, 
+        township, 
+        villages, 
+        disaster_history, 
+        demarcation_adjustments, 
+        file_name, 
+        storage_group, 
+        risk_history
+    FROM streams;
+"""
+
+# -------------------------------------------------------------
+# 2. 確保 DataFrame 欄位名稱清單完全一一對齊 (共 9 個)
+# -------------------------------------------------------------
+columns = [
+    "stream_id",
+    "county",
+    "township",
+    "villages",
+    "disaster_history",
+    "demarcation_adjustments",
+    "file_name",
+    "storage_group",
+    "risk_history"
+]
+
+# 建立 DataFrame 並將字串欄位填補空字串，避免 None 導致 .str 操作報錯
+    df = pd.DataFrame(rows, columns=columns)
+    df["file_name"] = df["file_name"].fillna("").astype(str)
+    df["stream_id"] = df["stream_id"].fillna("").astype(str)
+    df["county"] = df["county"].fillna("").astype(str)
+    df["township"] = df["township"].fillna("").astype(str)
+    df["villages"] = df["villages"].fillna("").astype(str)
+    df["demarcation_adjustments"] = df["demarcation_adjustments"].fillna("").astype(str)
+    df["risk_history"] = df["risk_history"].fillna("").astype(str)
+    df["disaster_history"] = df["disaster_history"].fillna("").astype(str)    
+
+
     payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
     try:
         resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
@@ -318,6 +360,19 @@ with st.container():
                 filtered_df["villages"].str.contains(pat, case=False, na=False) |
                 filtered_df["file_name"].str.contains(pat, case=False, na=False)
             ]
+
+    # 關鍵字篩選安全防護寫法
+    if keyword:
+        pat = keyword.strip()
+        mask = (
+            filtered_df["stream_id"].astype(str).str.contains(pat, case=False, na=False) |
+            filtered_df["file_name"].astype(str).str.contains(pat, case=False, na=False) |
+            filtered_df["county"].astype(str).str.contains(pat, case=False, na=False) |
+            filtered_df["township"].astype(str).str.contains(pat, case=False, na=False) |
+            filtered_df["villages"].astype(str).str.contains(pat, case=False, na=False)
+        )
+        filtered_df = filtered_df[mask]
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
 # 狀態提示列
