@@ -153,11 +153,21 @@ def query_turso_db(keyword: str):
 # -------------------------------------------------------------
 # 4. 解析與建構風險等級異動歷程 (垂直分行，新至舊)
 # -------------------------------------------------------------
-def build_risk_history_boxes(risk_history_raw: str):
+def extract_valid_risk_json(group_records: list) -> str:
+    """從溪流的所有報告中找到有內容的 risk_history JSON"""
+    for rec in group_records:
+        raw = rec.get("risk_history")
+        if raw and str(raw).strip().startswith("[") and str(raw).strip() != "[]":
+            return str(raw).strip()
+    return ""
+
+def build_risk_history_boxes(group_records: list):
     """
     將 risk_history JSON 解析為 Flex Message 垂直結構元件
     """
-    if not risk_history_raw or not str(risk_history_raw).strip().startswith("["):
+    risk_history_raw = extract_valid_risk_json(group_records)
+
+    if not risk_history_raw:
         return [{
             "type": "text",
             "text": "• 尚無 2010～2026 公告風險等級紀錄",
@@ -175,7 +185,7 @@ def build_risk_history_boxes(risk_history_raw: str):
                 "color": "#9CA3AF"
             }]
 
-        # 1. 先按年份由小到大正序掃描，找出首次劃設與異動點
+        # 1. 先按年份正序掃描，找出首次劃設與異動點
         sorted_asc = sorted(r_list, key=lambda x: x.get("year", 0))
         change_records = []
         prev_risk = None
@@ -224,7 +234,7 @@ def build_risk_history_boxes(risk_history_raw: str):
                         "size": "xs",
                         "weight": "bold",
                         "color": "#1F2937",
-                        "flex": 3
+                        "flex": 4
                     },
                     {
                         "type": "box",
@@ -252,7 +262,7 @@ def build_risk_history_boxes(risk_history_raw: str):
                         "size": "xxs",
                         "color": "#6B7280",
                         "margin": "sm",
-                        "flex": 3
+                        "flex": 4
                     }
                 ]
             }
@@ -262,7 +272,7 @@ def build_risk_history_boxes(risk_history_raw: str):
     except Exception as e:
         return [{
             "type": "text",
-            "text": f"• 風險等級資料解析異常: {e}",
+            "text": f"• 風險等級解析異常: {e}",
             "size": "xs",
             "color": "#9CA3AF"
         }]
@@ -274,7 +284,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
     """
     建立聚合單一溪流的卡片：
     - 頂部：溪流編號、位置與歷年調查年度清單
-    - 內容 1：歷年風險等級異動歷程
+    - 內容 1：歷年風險等級異動歷程 (垂直分行彩色標籤)
     - 內容 2：劃設調整沿革
     - 內容 3：歷年重大災害情勢
     - 底部：各年度報告之專屬 PDF 下載按鈕 (由新至舊)
@@ -305,8 +315,8 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
             report_years.append(f"{yr}年")
     years_summary = "、".join(report_years) if report_years else "無紀錄"
 
-    # 1. 歷年風險等級異動元件
-    risk_history_boxes = build_risk_history_boxes(latest_rec.get("risk_history", ""))
+    # 1. 歷年風險等級異動元件 (強健跨報告抓取)
+    risk_history_boxes = build_risk_history_boxes(group_records)
 
     # 2. 歷年重大災害情勢元件 (去重)
     all_disasters = []
@@ -555,8 +565,8 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                     grouped_streams = defaultdict(list)
                     for r in raw_records:
                         sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist = r
-                        v_list = json.loads(v_raw) if v_raw and v_raw.startswith("[") else []
-                        h_list = json.loads(h_raw) if h_raw and h_raw.startswith("[") else []
+                        v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
+                        h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
                         yr = parse_report_year(fname)
                         
                         stream_key = sid.strip() if sid else f"{cty}{twn}未編號"
