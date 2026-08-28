@@ -336,7 +336,7 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # =============================================================
-# TAB 1: 調查資料 (沿革與災情)
+# TAB 1: 調查資料 (沿革與災情)(依溪流整併聚合：單一溪流合而為一)
 # =============================================================
 with tab1:
     if not has_filter:
@@ -349,20 +349,61 @@ with tab1:
     elif filtered_df.empty:
         st.warning("⚠️ 查無符合條件之溪流調查資料。")
     else:
+        # 依 stream_id 進行整併聚合
+        grouped_streams = {}
         for idx, r in filtered_df.iterrows():
-            sid = r["stream_id"] or "未編號溪流"
-            cty = r["county"] or ""
-            twn = r["township"] or ""
-            v_list = json.loads(r["villages"]) if r["villages"] and r["villages"].startswith("[") else []
-            v_str = "、".join(v_list) if v_list else "未載明村里"
-            adj = r["demarcation_adjustments"] or "無調整紀錄"
+            sid = str(r["stream_id"]).strip() if pd.notna(r["stream_id"]) and str(r["stream_id"]).strip() else f"{r.get('county','')}{r.get('township','')}未編號"
             
-            with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}）", expanded=(len(filtered_df) == 1)):
-                st.markdown(f"**📐 劃設調整沿革**：\n{adj}")
+            if sid not in grouped_streams:
+                v_list = json.loads(r["villages"]) if r["villages"] and str(r["villages"]).startswith("[") else []
+                grouped_streams[sid] = {
+                    "stream_id": sid,
+                    "county": r.get("county") or "",
+                    "township": r.get("township") or "",
+                    "villages": set(v_list),
+                    "adjustments": r.get("demarcation_adjustments") or "無調整紀錄",
+                    "disasters": [],
+                    "seen_disaster_keys": set(),
+                    "report_count": 0
+                }
+            else:
+                # 彙整涵蓋村里
+                if r["villages"] and str(r["villages"]).startswith("["):
+                    grouped_streams[sid]["villages"].update(json.loads(r["villages"]))
+                # 保留最完整之沿革文字
+                curr_adj = r.get("demarcation_adjustments") or ""
+                if len(curr_adj) > len(grouped_streams[sid]["adjustments"]):
+                    grouped_streams[sid]["adjustments"] = curr_adj
+
+            grouped_streams[sid]["report_count"] += 1
+
+            # 跨年度重大災害事件自動去重彙整
+            if r["disaster_history"] and str(r["disaster_history"]).startswith("["):
+                try:
+                    h_list = json.loads(r["disaster_history"])
+                    for d in h_list:
+                        d_key = f"{d.get('year')}_{d.get('scale_and_damage') or d.get('description')}"
+                        if d_key not in grouped_streams[sid]["seen_disaster_keys"]:
+                            grouped_streams[sid]["seen_disaster_keys"].add(d_key)
+                            grouped_streams[sid]["disasters"].append(d)
+                except Exception:
+                    pass
+
+        # 呈現溪流卡片清單
+        st.caption(f"📌 共涵蓋 **{len(grouped_streams)}** 條土石流潛勢溪流")
+        for sid, info in grouped_streams.items():
+            cty = info["county"]
+            twn = info["township"]
+            v_str = "、".join(sorted(info["villages"])) if info["villages"] else "未載明村里"
+            adj = info["adjustments"]
+            h_list = info["disasters"]
+            rep_cnt = info["report_count"]
+            
+            with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}） ｜ 歷年報告：{rep_cnt} 份", expanded=(len(grouped_streams) == 1)):
+                st.markdown(f"**📐 劃設調整沿革**：\n\n{adj}")
                 
-                h_list = json.loads(r["disaster_history"]) if r["disaster_history"] and r["disaster_history"].startswith("[") else []
                 if h_list:
-                    st.markdown("**🕒 歷年重大災害情勢**：")
+                    st.markdown("**🕒 歷年重大災害情勢（彙整歷年調查紀錄）**：")
                     for d in h_list:
                         yr = d.get("year", "歷史災害")
                         rf = d.get("rainfall_info", "")
@@ -377,54 +418,6 @@ with tab1:
                         """, unsafe_allow_html=True)
                 else:
                     st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
-
-# --- TAB 2 渲染更新 ---
-with tab2:
-    if not has_filter:
-        st.markdown("""
-        <div class="empty-state">
-            <h4 style="margin:0 0 8px 0; color:#475569;">📄 尚未選擇查詢條件</h4>
-            <p style="margin:0; font-size:14px;">請於上方設定條件，系統將依年度由新至舊列出調查報告 PDF 與下載連結。</p>
-        </div>
-        """, unsafe_allow_html=True)
-    elif filtered_df.empty:
-        st.warning("⚠️ 查無符合條件之調查報告。")
-    else:
-        def parse_report_year(fn):
-            m = re.search(r"^(19\d\d|20\d\d)", str(fn))
-            return int(m.group(1)) if m else 0
-
-        df_reports = filtered_df.copy()
-        df_reports["report_year"] = df_reports["file_name"].apply(parse_report_year)
-        df_reports = df_reports.sort_values(by=["report_year", "stream_id"], ascending=[False, True])
-
-        for idx, r in df_reports.iterrows():
-            yr = r["report_year"]
-            yr_display = f"{yr} 年" if yr > 0 else "調查年份未標明"
-            fname = r["file_name"]
-            sid = r["stream_id"] or "未知編號"
-            s_grp = r["storage_group"]
-            
-            # 取得下載網址與錯誤訊息
-            dl_url, err_msg = get_r2_download_url(fname, s_grp)
-            
-            c_info, c_btn = st.columns([3, 1])
-            with c_info:
-                st.markdown(f"""
-                <div style="padding-top:4px;">
-                    <span class="year-tag">📅 {yr_display}</span>
-                    <b style="font-size:15px; margin-left:6px; color:#1E293B;">【{sid}】</b> 
-                    <span style="color:#64748B; font-size:13px;">{fname}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            with c_btn:
-                if dl_url:
-                    st.link_button("⬇️ 下載 PDF", dl_url, type="primary")
-                else:
-                    st.button("⚠️ 無連結", disabled=True, key=f"btn_dis_{idx}", help=err_msg)
-                    if err_msg:
-                        st.caption(f"<span style='color:#DC2626;font-size:11px;'>{err_msg}</span>", unsafe_allow_html=True)
-            st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
 # =============================================================
 # TAB 3: AI 智慧決策摘要
