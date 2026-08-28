@@ -287,13 +287,13 @@ def load_all_streams_data():
         return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. Gemini AI 智慧決策摘要 (gemini-3.7-flash + 快取保護 + 指數退避重試)
+# 5. Gemini AI 智慧決策摘要 (支援 503/429 重試 + 雙模型備援)
 # -------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def generate_ai_summary(stream_data_json_str: str) -> str:
     """
-    調用 Gemini 3.7 Flash 進行潛勢溪流多維度決策綜整分析
-    (具備 Streamlit 快取機制與 429 配額防護)
+    調用 Gemini 進行潛勢溪流多維度決策綜整分析
+    (具備 Streamlit 快取、429/503 自動退避重試與 gemini-2.5-flash 備援機制)
     """
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請於 Secrets 中配置後使用。"
@@ -325,32 +325,44 @@ def generate_ai_summary(stream_data_json_str: str) -> str:
 * **治理與應變對策**：提出工程清疏、導流或非工程警戒應變（如疏散避難機制）之精進建議。
 """
 
-    delays = [15, 30, 60]
-    for attempt in range(len(delays)):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.7-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=2500,
-                )
-            )
-            return response.text
+    # 優先嘗試主要模型，若遇 503 尖峰則無縫切換備援模型
+    models_to_try = ["gemini-3.7-flash", "gemini-2.5-flash"]
+    delays = [3, 8, 15]
 
-        except Exception as e:
-            err_msg = str(e)
-            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
-                wait_sec = delays[attempt]
-                if attempt < len(delays) - 1:
+    last_error = ""
+
+    for target_model in models_to_try:
+        for attempt, wait_sec in enumerate(delays):
+            try:
+                response = client.models.generate_content(
+                    model=target_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=2500,
+                    )
+                )
+                return response.text
+
+            except Exception as e:
+                err_msg = str(e)
+                last_error = err_msg
+                
+                # 判斷是否為暫時性錯誤 (503 高負載、429 頻率限制、500/502 伺服器異常)
+                is_transient = any(k in err_msg.lower() for k in [
+                    "503", "unavailable", "high demand", 
+                    "429", "resource_exhausted", "quota", 
+                    "500", "502", "504", "deadline"
+                ])
+                
+                if is_transient and attempt < len(delays) - 1:
                     time.sleep(wait_sec)
                     continue
                 else:
-                    return f"⏳ **API 請求頻率達到上限（429）**：系統已嘗試自動重試但仍受限，請稍候 1 分鐘後再點擊生成。"
-            else:
-                return f"❌ **AI 生成失敗**：{err_msg}"
+                    # 當前模型重試失敗，跳出迴圈切換下一個備援模型
+                    break
 
-    return "⚠️ 決策報告生成異常，請重試。"
+    return f"⏳ **Google API 伺服器忙碌中（503/429）**：目前官方伺服器負載較高，系統已嘗試重試與備援模型但仍受限，請稍候 30 秒至 1 分鐘後再次點擊生成。\n\n*(詳細錯誤: {last_error})*"
 
 # -------------------------------------------------------------
 # 6. 主頁面與頂部條件篩選
