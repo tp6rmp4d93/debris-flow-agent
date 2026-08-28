@@ -266,7 +266,7 @@ def generate_ai_summary_cached(stream_ids_tuple, sample_data_json, api_key):
 for attempt in range(3):
     try:
         response = model.generate_content(prompt)
-        return response.text
+    return response.text
     except ResourceExhausted:
         if attempt < 2:
             time.sleep(10)
