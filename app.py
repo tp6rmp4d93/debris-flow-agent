@@ -221,66 +221,28 @@ def get_r2_download_url(file_name, storage_group) -> tuple[str, str]:
 # 4. Turso 資料庫載入與快取
 # -------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
-def load_all_streams_from_turso():
-    if not TURSO_URL or not TURSO_TOKEN:
-        return pd.DataFrame()
-
+def load_all_streams_data():
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
-    headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
-# -------------------------------------------------------------
-# 1. 確保 SQL 查詢包含所有 9 個標準欄位
-# -------------------------------------------------------------
-sql = """
-    SELECT 
-    stream_id, 
-    county, 
-    township, 
-    villages, 
-    disaster_history, 
-    demarcation_adjustments, 
-    file_name, 
-    storage_group, 
-    risk_history
-    FROM streams;
-"""
-
-# -------------------------------------------------------------
-# 2. 確保 DataFrame 欄位名稱清單完全一一對齊 (共 9 個)
-# -------------------------------------------------------------
-columns = [
-    "stream_id",
-    "county",
-    "township",
-    "villages",
-    "disaster_history",
-    "demarcation_adjustments",
-    "file_name",
-    "storage_group",
-    "risk_history"
-]
-
-# 建立 DataFrame 並將字串欄位填補空字串，避免 None 導致 .str 操作報錯
-df = pd.DataFrame(rows, columns=columns)
-df["file_name"] = df["file_name"].fillna("").astype(str)
-df["stream_id"] = df["stream_id"].fillna("").astype(str)
-df["county"] = df["county"].fillna("").astype(str)
-df["township"] = df["township"].fillna("").astype(str)
-df["villages"] = df["villages"].fillna("").astype(str)
-df["demarcation_adjustments"] = df["demarcation_adjustments"].fillna("").astype(str)
-df["risk_history"] = df["risk_history"].fillna("").astype(str)
-df["disaster_history"] = df["disaster_history"].fillna("").astype(str)    
-
-
-payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
+    headers = {
+        "Authorization": f"Bearer {TURSO_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
+    sql = """
+        SELECT stream_id, county, township, villages, disaster_history, 
+               demarcation_adjustments, file_name, storage_group, risk_history 
+        FROM streams;
+    """
+    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
+    
     try:
         resp = requests.post(http_url, headers=headers, json=payload, timeout=12)
         res = resp.json()["results"][0]["response"]["result"]
         cols = [c["name"] for c in res["cols"]]
         rows = [[c.get("value") for c in r] for r in res.get("rows", [])]
-        return pd.DataFrame(rows, columns=cols)  # 👈 這行往內縮排（與上方指令對齊）
+        return pd.DataFrame(rows, columns=cols)
     except Exception as e:
         st.error(f"Turso 資料庫連線失敗: {e}")
-        return pd.DataFrame()  # 👈 這行往內縮排（與 st.error 對齊）
+        return pd.DataFrame()
 
 # -------------------------------------------------------------
 # 5. Gemini AI 智慧決策摘要 (輕量 3.1 Flash-Lite + 快取保護)
