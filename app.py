@@ -621,33 +621,34 @@ with tab2:
 # TAB 3: AI 智慧決策摘要
 # =============================================================
 with tab3:
-    if not has_filter:
+    if not has_filter or filtered_df.empty:
         st.markdown("""
         <div class="empty-state">
-            <h4 style="margin:0 0 8px 0; color:#475569;">🤖 尚未鎖定分析對象</h4>
-            <p style="margin:0; font-size:14px;">請於上方篩選特定區域或溪流後，點擊按鈕即可調用 Gemini AI 進行防救災與治理決策綜整。</p>
+            <h4 style="margin:0 0 8px 0; color:#475569;">🤖 尚未選擇分析對象</h4>
+            <p style="margin:0; font-size:14px;">請於上方設定條件篩選溪流，以啟動 Gemini 3.7 Flash 進行多維度決策綜整分析。</p>
         </div>
         """, unsafe_allow_html=True)
-    elif filtered_df.empty:
-        st.warning("⚠️ 目前條件下無任何溪流資料可供分析。")
     else:
-        st.markdown(f"##### 🤖 當前篩選範圍（共 {len(filtered_df)} 筆）之 AI 決策綜整")
-        if st.button("✨ 產生防救災與治理建議綜整報告", type="primary", use_container_width=True):
-            if not GEMINI_API_KEY:
-                st.error("❌ 未設定 GEMINI_API_KEY，請至 secrets.toml 設定。")
-            else:
-                with st.spinner("Gemini 正在彙整分析歷年調查紀錄..."):
-                    target_records = filtered_df[["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments"]].head(15).to_dict(orient="records")
-                    stream_ids = tuple(filtered_df["stream_id"].head(15).tolist())
-                    data_json_str = json.dumps(target_records, ensure_ascii=False)
-                    
-                    try:
-                        result_text = generate_ai_summary_cached(stream_ids, data_json_str, GEMINI_API_KEY)
-                        st.markdown(result_text)
-                    except ResourceExhausted:
-                        st.error("⏳ API 呼叫頻率已達免費上限，請稍候 1 分鐘後重試。")
-                    except Exception as e:
-                        st.error(f"AI 生成失敗: {e}")
+        st.markdown("#### 🧠 當前範圍之土石流潛勢溪流 AI 專家決策綜整")
+        
+        # 整理當前篩選溪流的整合資料結構
+        summary_payload = []
+        for sid, info in grouped_streams.items():
+            summary_payload.append({
+                "溪流編號": sid,
+                "行政區": f"{info['county']}{info['township']}",
+                "涵蓋村里": list(info["villages"]),
+                "劃設調整沿革": info["adjustments"],
+                "歷年風險等級歷程(2010-2026)": info.get("risk_history", []),
+                "歷年重大災害紀錄": info["disasters"]
+            })
+        
+        payload_json_str = json.dumps(summary_payload, ensure_ascii=False)
+        
+        if st.button("✨ 立即生成專家決策綜整報告", type="primary"):
+            with st.spinner("🚀 Gemini 3.7 Flash 正在比對歷年沿革、風險等級與致災歷史，生成決策報告中..."):
+                report_markdown = generate_ai_summary(payload_json_str)
+                st.markdown(report_markdown)
 
 # -------------------------------------------------------------
 # 8. 頁尾極簡狀態列 (不起眼顯示於最下方)
