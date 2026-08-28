@@ -260,15 +260,15 @@ columns = [
 ]
 
 # 建立 DataFrame 並將字串欄位填補空字串，避免 None 導致 .str 操作報錯
-    df = pd.DataFrame(rows, columns=columns)
-    df["file_name"] = df["file_name"].fillna("").astype(str)
-    df["stream_id"] = df["stream_id"].fillna("").astype(str)
-    df["county"] = df["county"].fillna("").astype(str)
-    df["township"] = df["township"].fillna("").astype(str)
-    df["villages"] = df["villages"].fillna("").astype(str)
-    df["demarcation_adjustments"] = df["demarcation_adjustments"].fillna("").astype(str)
-    df["risk_history"] = df["risk_history"].fillna("").astype(str)
-    df["disaster_history"] = df["disaster_history"].fillna("").astype(str)    
+df = pd.DataFrame(rows, columns=columns)
+df["file_name"] = df["file_name"].fillna("").astype(str)
+df["stream_id"] = df["stream_id"].fillna("").astype(str)
+df["county"] = df["county"].fillna("").astype(str)
+df["township"] = df["township"].fillna("").astype(str)
+df["villages"] = df["villages"].fillna("").astype(str)
+df["demarcation_adjustments"] = df["demarcation_adjustments"].fillna("").astype(str)
+df["risk_history"] = df["risk_history"].fillna("").astype(str)
+df["disaster_history"] = df["disaster_history"].fillna("").astype(str)    
 
 
     payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
