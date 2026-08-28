@@ -499,10 +499,10 @@ with tab1:
                 
                 st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
                 
-                # 2. 歷年風險評估等級歷程 (前端即時過濾異動點 + 由新至舊朝左箭頭)
+                # 2. 歷年風險評估等級歷程 (垂直分行條列，手機版不破版)
                 st.markdown("**📊 歷年風險評估等級異動歷程**：")
                 if r_history:
-                    # 1. 先按年份由小到大 (舊 -> 新) 正序掃描，找出首次劃設與異動點
+                    # 正序掃描找出異動點
                     sorted_asc = sorted(r_history, key=lambda x: x.get("year", 0))
                     change_records = []
                     prev_risk = None
@@ -518,10 +518,9 @@ with tab1:
                                 change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
                                 prev_risk = r_val
 
-                    # 2. 轉為「由新至舊 (降冪)」倒序排列
+                    # 由新至舊 (降冪) 排列
                     sorted_changes = sorted(change_records, key=lambda x: x["year"], reverse=True)
 
-                    # 3. 顏色標籤樣式
                     def get_risk_badge(r_val):
                         if "高" in r_val:
                             return f"<span style='background-color:#FEE2E2; color:#991B1B; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
@@ -532,25 +531,25 @@ with tab1:
                         else:
                             return f"<span style='background-color:#F1F5F9; color:#475569; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
 
-                    items = []
-                    for item in sorted_changes:
+                    line_items = []
+                    for idx, item in enumerate(sorted_changes):
                         y = item["year"]
                         r_name = item["risk"]
                         status = item["status"]
                         badge = get_risk_badge(r_name)
-                        status_tag = f"<span style='color:#64748B; font-size:11px; margin-left:4px;'>({status})</span>"
-                        items.append(f"<b>[{y}]</b> {badge}{status_tag}")
-
-                    # 4. 以「向左箭頭」連接（新年度在前 ⬅️ 舊年度在後）
-                    risk_items_html = " &nbsp; 🠔 &nbsp; ".join(items)
+                        status_tag = f"<span style='color:#64748B; font-size:12px; margin-left:6px;'>（{status}）</span>"
+                        
+                        # 第一筆標註為最新現況
+                        prefix = "🔸 <b>最新現況</b>：" if (idx == 0 and len(sorted_changes) > 1) else "🔹 "
+                        line_items.append(f"<div style='margin-bottom: 6px;'>{prefix}<b>[{y}年]</b> {badge} {status_tag}</div>")
 
                     st.markdown(f"""
-                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; line-height:2.0; font-size:14px;">
-                        {risk_items_html}
+                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; font-size:13px; line-height:1.6;">
+                        {''.join(line_items)}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    st.markdown("<span style='color:#94A3B8; font-size:14px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
+                    st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
 
                 # 3. 歷年重大災害情勢
                 if h_list:
@@ -654,7 +653,12 @@ with tab3:
                 st.markdown(report_markdown)
 
 # -------------------------------------------------------------
-# 8. 頁尾極簡狀態列
+# 8. 頁尾極簡狀態列 (分行置中排版)
 # -------------------------------------------------------------
-st.markdown("<br><hr style='margin: 20px 0 8px 0; border:0; border-top:1px solid #F1F5F9;'>", unsafe_allow_html=True)
-st.caption("資料來源：農業部農村發展及水土保持署 ｜ 協力單位：財團法人中興工程顧問社")
+st.markdown("<br><hr style='margin: 24px 0 12px 0; border:0; border-top:1px solid #E2E8F0;'>", unsafe_allow_html=True)
+st.markdown("""
+<div style="text-align: center; color: #64748B; font-size: 12px; line-height: 1.8;">
+    <div>資料來源：農業部農村發展及水土保持署</div>
+    <div>協力單位：財團法人中興工程顧問社</div>
+</div>
+""", unsafe_allow_html=True)
