@@ -30,6 +30,9 @@ CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
+if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
+    print("⚠️ 警告: 請設定 LINE_CHANNEL_ACCESS_TOKEN 與 LINE_CHANNEL_SECRET 環境變數。")
+
 parser = WebhookParser(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 r2_clients_cache = {}
@@ -105,7 +108,7 @@ def get_r2_download_url(file_name: str, storage_group: str) -> str:
         return ""
 
 # -------------------------------------------------------------
-# 3. Turso 資料庫查詢
+# 3. Turso 資料庫查詢 (納入 risk_history 欄位)
 # -------------------------------------------------------------
 def query_turso_db(keyword: str):
     """查詢相符的溪流調查紀錄 (最多撈取 15 筆做聚合)"""
@@ -120,7 +123,7 @@ def query_turso_db(keyword: str):
     pat = f"%{keyword.strip()}%"
     
     sql = """
-        SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group
+        SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history
         FROM streams 
         WHERE stream_id LIKE ? OR county LIKE ? OR township LIKE ? OR villages LIKE ? OR file_name LIKE ?
         ORDER BY file_name DESC
@@ -148,23 +151,164 @@ def query_turso_db(keyword: str):
         return []
 
 # -------------------------------------------------------------
-# 4. LINE Flex Message 視覺卡片構建 (依溪流聚合 + 多年份下載清單)
+# 4. 解析與建構風險等級異動歷程 (垂直分行，新至舊)
+# -------------------------------------------------------------
+def build_risk_history_boxes(risk_history_raw: str):
+    """
+    將 risk_history JSON 解析為 Flex Message 垂直結構元件
+    """
+    if not risk_history_raw or not str(risk_history_raw).strip().startswith("["):
+        return [{
+            "type": "text",
+            "text": "• 尚無 2010～2026 公告風險等級紀錄",
+            "size": "xs",
+            "color": "#9CA3AF"
+        }]
+
+    try:
+        r_list = json.loads(risk_history_raw)
+        if not r_list:
+            return [{
+                "type": "text",
+                "text": "• 尚無 2010～2026 公告風險等級紀錄",
+                "size": "xs",
+                "color": "#9CA3AF"
+            }]
+
+        # 1. 先按年份由小到大正序掃描，找出首次劃設與異動點
+        sorted_asc = sorted(r_list, key=lambda x: x.get("year", 0))
+        change_records = []
+        prev_risk = None
+
+        for item in sorted_asc:
+            y = item.get("year")
+            r_val = str(item.get("risk", "")).strip()
+            if r_val and r_val.lower() not in ['nan', 'none', 'null', '']:
+                if prev_risk is None:
+                    change_records.append({"year": y, "risk": r_val, "status": "首次公告劃設"})
+                    prev_risk = r_val
+                elif r_val != prev_risk:
+                    change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
+                    prev_risk = r_val
+
+        # 2. 轉為「由新至舊」倒序
+        sorted_desc = sorted(change_records, key=lambda x: x["year"], reverse=True)
+
+        risk_boxes = []
+        for idx, item in enumerate(sorted_desc):
+            y = item["year"]
+            r_name = item["risk"]
+            status = item["status"]
+
+            # 色彩配置
+            if "高" in r_name:
+                bg_color, text_color = "#FEE2E2", "#991B1B"
+            elif "中" in r_name:
+                bg_color, text_color = "#FEF3C7", "#92400E"
+            elif "低" in r_name:
+                bg_color, text_color = "#DCFCE7", "#166534"
+            else:
+                bg_color, text_color = "#F3F4F6", "#374151"
+
+            prefix_tag = "🔸 [現況] " if idx == 0 and len(sorted_desc) > 1 else "🔹 "
+
+            row_box = {
+                "type": "box",
+                "layout": "horizontal",
+                "alignItems": "center",
+                "margin": "xs",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"{prefix_tag}{y}年",
+                        "size": "xs",
+                        "weight": "bold",
+                        "color": "#1F2937",
+                        "flex": 3
+                    },
+                    {
+                        "type": "box",
+                        "layout": "vertical",
+                        "backgroundColor": bg_color,
+                        "cornerRadius": "sm",
+                        "paddingStart": "6px",
+                        "paddingEnd": "6px",
+                        "paddingTop": "2px",
+                        "paddingBottom": "2px",
+                        "alignItems": "center",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": r_name,
+                                "size": "xxs",
+                                "weight": "bold",
+                                "color": text_color
+                            }
+                        ]
+                    },
+                    {
+                        "type": "text",
+                        "text": f"（{status}）",
+                        "size": "xxs",
+                        "color": "#6B7280",
+                        "margin": "sm",
+                        "flex": 3
+                    }
+                ]
+            }
+            risk_boxes.append(row_box)
+
+        return risk_boxes
+    except Exception as e:
+        return [{
+            "type": "text",
+            "text": f"• 風險等級資料解析異常: {e}",
+            "size": "xs",
+            "color": "#9CA3AF"
+        }]
+
+# -------------------------------------------------------------
+# 5. LINE Flex Message 視覺卡片構建
 # -------------------------------------------------------------
 def build_stream_flex_bubble(stream_id: str, group_records: list):
     """
     建立聚合單一溪流的卡片：
-    - 顯示該溪流最新沿革與歷年重大災害
-    - 底部條列該溪流「所有調查年度」之專屬下載按鈕 (由新至舊)
+    - 頂部：溪流編號、位置與歷年調查年度清單
+    - 內容 1：歷年風險等級異動歷程
+    - 內容 2：劃設調整沿革
+    - 內容 3：歷年重大災害情勢
+    - 底部：各年度報告之專屬 PDF 下載按鈕 (由新至舊)
     """
-    # 以最新一份報告作為主基本資料
     latest_rec = group_records[0]
     cty = latest_rec.get("county") or ""
     twn = latest_rec.get("township") or ""
-    v_list = latest_rec.get("villages") or []
-    v_str = "、".join(v_list) if v_list else "未標記村里"
-    adj = latest_rec.get("adjustments") or "無調整紀錄"
+    
+    # 整合涵蓋村里
+    villages = set()
+    for rec in group_records:
+        for v in rec.get("villages", []):
+            villages.add(v)
+    v_str = "、".join(sorted(villages)) if villages else "未標記村里"
 
-    # 彙整所有報告中的重大災害事件 (去重)
+    # 最長/最新沿革
+    adj = latest_rec.get("adjustments") or "無調整紀錄"
+    for rec in group_records:
+        curr_adj = rec.get("adjustments") or ""
+        if len(curr_adj) > len(adj):
+            adj = curr_adj
+
+    # 提取所有調查年度
+    report_years = []
+    for rec in group_records:
+        yr = rec.get("year", 0)
+        if yr > 0:
+            report_years.append(f"{yr}年")
+    years_summary = "、".join(report_years) if report_years else "無紀錄"
+
+    # 1. 歷年風險等級異動元件
+    risk_history_boxes = build_risk_history_boxes(latest_rec.get("risk_history", ""))
+
+    # 2. 歷年重大災害情勢元件 (去重)
     all_disasters = []
     seen_events = set()
     for rec in group_records:
@@ -174,10 +318,9 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
                 seen_events.add(event_key)
                 all_disasters.append(d)
 
-    # 歷年重大災害方塊
     disaster_boxes = []
     if all_disasters:
-        for d in all_disasters[:8]:  # 最多顯示 8 筆重大災害
+        for d in all_disasters[:6]:  # 最多顯示 6 筆
             yr = d.get("year", "歷史事件")
             rf = d.get("rainfall_info", "")
             dmg = d.get("scale_and_damage") or d.get("description", "無詳細災情紀錄")
@@ -224,11 +367,11 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
             "color": "#9CA3AF"
         })
 
-    # 底部歷年報告下載按鈕 (依年份由新到舊排列)
+    # 3. 歷年報告下載按鈕 (由新到舊排列)
     report_buttons = []
     for rec in group_records:
         yr = rec.get("year")
-        yr_label = f"{yr} 年調查報告" if yr > 0 else "調查報告 (未標年)"
+        yr_label = f"{yr} 年報告" if yr > 0 else "調查報告"
         fname = rec.get("file_name")
         sgrp = rec.get("storage_group")
         
@@ -247,14 +390,14 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
                 "margin": "xs"
             })
 
-    # 卡片本體結構
+    # 卡片結構組裝
     bubble = {
         "type": "bubble",
         "size": "mega",
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#2E7D32",
+            "backgroundColor": "#1E3A8A",
             "paddingAll": "14px",
             "contents": [
                 {
@@ -266,9 +409,16 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
                 },
                 {
                     "type": "text",
-                    "text": f"📍 {cty} {twn} {v_str}",
+                    "text": f"📍 {cty} {twn}（{v_str}）",
                     "size": "xs",
-                    "color": "#FFFFFF",
+                    "color": "#E0E7FF",
+                    "margin": "xs"
+                },
+                {
+                    "type": "text",
+                    "text": f"📅 調查年度：{years_summary}（共 {len(group_records)} 份）",
+                    "size": "xxs",
+                    "color": "#CBD5E1",
                     "margin": "xs"
                 }
             ]
@@ -278,12 +428,33 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
             "layout": "vertical",
             "paddingAll": "14px",
             "contents": [
+                # 區塊 1: 風險歷程
+                {
+                    "type": "text",
+                    "text": "📊 歷年風險等級異動歷程",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#111827"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": "#F8FAFC",
+                    "cornerRadius": "md",
+                    "paddingAll": "8px",
+                    "margin": "xs",
+                    "contents": risk_history_boxes
+                },
+                {"type": "separator", "margin": "md"},
+
+                # 區塊 2: 劃設調整沿革
                 {
                     "type": "text",
                     "text": "📐 劃設調整沿革",
                     "weight": "bold",
                     "size": "sm",
-                    "color": "#111827"
+                    "color": "#111827",
+                    "margin": "md"
                 },
                 {
                     "type": "text",
@@ -294,6 +465,8 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
                     "margin": "xs"
                 },
                 {"type": "separator", "margin": "md"},
+
+                # 區塊 3: 歷年重大災害
                 {
                     "type": "text",
                     "text": "🕒 歷年重大災害情勢",
@@ -312,7 +485,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
         }
     }
 
-    # 裝配底部歷年下載按鈕區
+    # 裝配底部下載按鈕區
     if report_buttons:
         bubble["footer"] = {
             "type": "box",
@@ -321,16 +494,16 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
             "contents": [
                 {
                     "type": "text",
-                    "text": f"📚 歷年調查報告清單（共 {len(report_buttons)} 份）",
+                    "text": "📚 歷年調查報告下載",
                     "weight": "bold",
                     "size": "xs",
-                    "color": "#4CAF50",
+                    "color": "#2563EB",
                     "margin": "none"
                 },
                 *report_buttons,
                 {
                     "type": "text",
-                    "text": "⚡ 下載連結有效期限 15 分鐘",
+                    "text": "⚡ 連結有效期限 15 分鐘",
                     "size": "xxs",
                     "color": "#94A3B8",
                     "align": "center",
@@ -342,7 +515,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
     return bubble
 
 # -------------------------------------------------------------
-# 5. FastAPI 路由與 Webhook 處理
+# 6. FastAPI 路由與 Webhook 處理
 # -------------------------------------------------------------
 @app.get("/")
 def health_check():
@@ -367,7 +540,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 user_text = event.message.text.strip()
                 
-                # 查詢 Turso 資料庫
+                # 查詢 Turso 資料庫 (包含 risk_history)
                 raw_records = query_turso_db(user_text)
 
                 if not raw_records:
@@ -375,14 +548,13 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                         text=f"🔍 查詢關鍵字：「{user_text}」\n\n"
                              "⚠️ 查無相符的土石流潛勢溪流紀錄。\n"
                              "💡 建議輸入：\n"
-                             "• 溪流編號 (如：投縣DF135、DF001)\n"
-                             "• 鄉鎮村里 (如：竹山鎮、秀林里、國姓鄉)"
+                             "• 溪流編號 (如：中市DF004、投縣DF135)\n"
+                             "• 鄉鎮村里 (如：和平區、達觀里、竹山鎮)"
                     )
                 else:
-                    # 依 Stream ID 分組，並將歷年報告依年份由新至舊排序
                     grouped_streams = defaultdict(list)
                     for r in raw_records:
-                        sid, cty, twn, v_raw, h_raw, adj, fname, s_grp = r
+                        sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist = r
                         v_list = json.loads(v_raw) if v_raw and v_raw.startswith("[") else []
                         h_list = json.loads(h_raw) if h_raw and h_raw.startswith("[") else []
                         yr = parse_report_year(fname)
@@ -397,12 +569,12 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                             "adjustments": adj,
                             "file_name": fname,
                             "storage_group": s_grp,
+                            "risk_history": r_hist,
                             "year": yr
                         })
 
-                    # 針對每條溪流內的報告由新至舊排序 (year 降冪)
                     bubbles = []
-                    for sid_key, recs in list(grouped_streams.items())[:5]:  # 最多顯示 5 張溪流輪播卡片
+                    for sid_key, recs in list(grouped_streams.items())[:5]:  # 最多 5 筆輪播
                         recs.sort(key=lambda x: x["year"], reverse=True)
                         bubble = build_stream_flex_bubble(sid_key, recs)
                         bubbles.append(bubble)
