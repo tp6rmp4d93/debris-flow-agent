@@ -232,15 +232,15 @@ def load_all_streams_from_turso():
 # -------------------------------------------------------------
 sql = """
     SELECT 
-        stream_id, 
-        county, 
-        township, 
-        villages, 
-        disaster_history, 
-        demarcation_adjustments, 
-        file_name, 
-        storage_group, 
-        risk_history
+    stream_id, 
+    county, 
+    township, 
+    villages, 
+    disaster_history, 
+    demarcation_adjustments, 
+    file_name, 
+    storage_group, 
+    risk_history
     FROM streams;
 """
 
