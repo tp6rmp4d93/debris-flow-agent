@@ -336,7 +336,7 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # =============================================================
-# TAB 1: 調查資料 (沿革與災情)(依溪流整併聚合：單一溪流合而為一)
+# TAB 1: 調查資料 (依溪流整併聚合 + 歷年風險等級歷程)
 # =============================================================
 with tab1:
     if not has_filter:
@@ -355,30 +355,37 @@ with tab1:
             sid = str(r["stream_id"]).strip() if pd.notna(r["stream_id"]) and str(r["stream_id"]).strip() else f"{r.get('county','')}{r.get('township','')}未編號"
             
             if sid not in grouped_streams:
-                v_list = json.loads(r["villages"]) if r["villages"] and str(r["villages"]).startswith("[") else []
+                v_list = json.loads(r["villages"]) if r.get("villages") and str(r["villages"]).startswith("[") else []
                 grouped_streams[sid] = {
                     "stream_id": sid,
                     "county": r.get("county") or "",
                     "township": r.get("township") or "",
                     "villages": set(v_list),
                     "adjustments": r.get("demarcation_adjustments") or "無調整紀錄",
+                    "risk_history": [],
                     "disasters": [],
                     "seen_disaster_keys": set(),
                     "report_count": 0
                 }
             else:
-                # 彙整涵蓋村里
-                if r["villages"] and str(r["villages"]).startswith("["):
+                if r.get("villages") and str(r["villages"]).startswith("["):
                     grouped_streams[sid]["villages"].update(json.loads(r["villages"]))
-                # 保留最完整之沿革文字
                 curr_adj = r.get("demarcation_adjustments") or ""
                 if len(curr_adj) > len(grouped_streams[sid]["adjustments"]):
                     grouped_streams[sid]["adjustments"] = curr_adj
 
             grouped_streams[sid]["report_count"] += 1
 
+            # 讀取風險等級歷程
+            if not grouped_streams[sid]["risk_history"] and r.get("risk_history"):
+                try:
+                    if str(r["risk_history"]).startswith("["):
+                        grouped_streams[sid]["risk_history"] = json.loads(r["risk_history"])
+                except Exception:
+                    pass
+
             # 跨年度重大災害事件自動去重彙整
-            if r["disaster_history"] and str(r["disaster_history"]).startswith("["):
+            if r.get("disaster_history") and str(r["disaster_history"]).startswith("["):
                 try:
                     h_list = json.loads(r["disaster_history"])
                     for d in h_list:
@@ -396,12 +403,48 @@ with tab1:
             twn = info["township"]
             v_str = "、".join(sorted(info["villages"])) if info["villages"] else "未載明村里"
             adj = info["adjustments"]
+            r_history = info["risk_history"]
             h_list = info["disasters"]
             rep_cnt = info["report_count"]
             
             with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}） ｜ 歷年報告：{rep_cnt} 份", expanded=(len(grouped_streams) == 1)):
+                # 1. 劃設調整沿革
                 st.markdown(f"**📐 劃設調整沿革**：\n\n{adj}")
                 
+                st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
+                
+                # 2. 歷年風險評估等級歷程 (置於劃設調整沿革正下方，由最新至最舊依序條列)
+                st.markdown("**📊 歷年風險評估等級歷程**：")
+                if r_history:
+                    # 依年份由新至舊 (降冪) 排序
+                    sorted_r_history = sorted(r_history, key=lambda x: x.get("year", 0), reverse=True)
+                    
+                    # 建立色彩標籤
+                    def get_risk_badge(r_val):
+                        if "高" in r_val:
+                            return f"<span style='background-color:#FEE2E2; color:#991B1B; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        elif "中" in r_val:
+                            return f"<span style='background-color:#FEF3C7; color:#92400E; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        elif "低" in r_val:
+                            return f"<span style='background-color:#DCFCE7; color:#166534; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        else:
+                            return f"<span style='background-color:#F1F5F9; color:#475569; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+
+                    risk_items_html = " &nbsp; | &nbsp; ".join([
+                        f"<b>[{item.get('year')}]</b> {get_risk_badge(item.get('risk'))}" 
+                        for item in sorted_r_history
+                    ])
+                    st.markdown(f"""
+                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; line-height:2.0; font-size:13px;">
+                        {risk_items_html}
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
+
+                st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
+
+                # 3. 歷年重大災害情勢
                 if h_list:
                     st.markdown("**🕒 歷年重大災害情勢（彙整歷年調查紀錄）**：")
                     for d in h_list:
