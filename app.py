@@ -227,7 +227,7 @@ def load_all_streams_from_turso():
 
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
     headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
-    sql = "SELECT file_name, stream_id, county, township, villages, disaster_history, demarcation_adjustments, storage_group FROM streams;"
+    sql = "SELECT file_name, stream_id, county, township, villages, demarcation_adjustments, file_name, storage_group, risk_history FROM streams;"
     
     payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
     try:
