@@ -13,3 +13,4 @@ fiona
 toml
 google-generativeai
 pandas
+google-genai
