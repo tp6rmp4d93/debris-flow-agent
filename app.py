@@ -545,12 +545,12 @@ with tab1:
                     risk_items_html = " &nbsp; 🠔 &nbsp; ".join(items)
 
                     st.markdown(f"""
-                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; line-height:2.0; font-size:13px;">
+                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; line-height:2.0; font-size:14px;">
                         {risk_items_html}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
+                    st.markdown("<span style='color:#94A3B8; font-size:14px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
 
                 # 3. 歷年重大災害情勢
                 if h_list:
