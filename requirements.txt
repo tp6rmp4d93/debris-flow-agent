@@ -14,3 +14,4 @@ toml
 google-generativeai
 pandas
 google-genai
+openpyxl
