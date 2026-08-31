@@ -270,9 +270,12 @@ if "schedule_data" in st.session_state:
             origin = f"{pts[0]['lat']},{pts[0]['lng']}"
             dest = f"{pts[-1]['lat']},{pts[-1]['lng']}"
             waypoints_param = ""
+            
             if len(pts) > 2:
                 mid_pts = pts[1:-1]
-                waypoints_param = f"&waypoints={'|'.join([f'{p[\"lat\"]},{p[\"lng\"]}' for p in mid_pts])}"
+                mid_coords_list = [f"{p['lat']},{p['lng']}" for p in mid_pts]
+                waypoints_str = "|".join(mid_coords_list)
+                waypoints_param = f"&waypoints={waypoints_str}"
             
             gmaps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={dest}{waypoints_param}&travelmode=driving"
             daily_gmaps_urls.append({"day": route["day"], "url": gmaps_url})
