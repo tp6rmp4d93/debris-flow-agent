@@ -4,6 +4,7 @@ import json
 import math
 import datetime
 import httpx
+import re
 import pandas as pd
 import streamlit as st
 
@@ -62,7 +63,7 @@ def get_transit_info(county):
     return region, hsr
 
 # ==============================================================================
-# 2. 雙軌資料庫載入 (GeoJSON + 歷史 JSON)
+# 2. 輔助函式與狀態初始化
 # ==============================================================================
 @st.cache_data
 def load_all_stream_data():
@@ -79,7 +80,6 @@ def load_all_stream_data():
                 sid = props.get("Debrisno")
                 if not sid: continue
                 
-                # 擷取起點座標作為備援
                 fallback_lat, fallback_lng = 23.5, 120.5
                 if geom and geom.get("coordinates"):
                     try:
@@ -113,6 +113,18 @@ if "geojson_db" not in st.session_state or "history_db" not in st.session_state:
     st.session_state.geojson_db = g_db
     st.session_state.history_db = h_db
 
+def guess_county_from_id(stream_id):
+    mapping = {
+        "北": "新北市", "宜": "宜蘭縣", "桃": "桃園市", "竹縣": "新竹縣", "苗": "苗栗縣", 
+        "中市": "臺中市", "彰": "彰化縣", "投": "南投縣", "雲": "雲林縣", "嘉縣": "嘉義縣", 
+        "南市": "臺南市", "高市": "高雄市", "屏": "屏東縣", "東縣": "臺東縣", "花": "花蓮縣",
+        "基市": "基隆市"
+    }
+    for prefix, county in mapping.items():
+        if stream_id.startswith(prefix):
+            return county
+    return "待查"
+
 def extract_county_from_text(text):
     for c in ADJACENT_MAP.keys():
         if c in text or c.replace("市", "").replace("縣", "") in text:
@@ -128,6 +140,12 @@ def estimate_drive_time_minutes(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     dist_km = R * c
     return max(15, round((dist_km * 1.4 / 35.0) * 60))
+
+def round_time_to_15_mins(dt):
+    """將時間四捨五入至最接近的 15、30、45、00 分"""
+    minutes = dt.minute
+    rounded_minutes = round(minutes / 15.0) * 15
+    return dt.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=rounded_minutes)
 
 # ==============================================================================
 # 3. 核心排程引擎
@@ -188,7 +206,9 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
         if current_day_idx == 0 and daily_count == 0 and "自駕" in list(transport_modes_used)[0]:
             travel_min = max(60, travel_min)
 
+        # 加入車程並套用「逢 15 分鐘進位」邏輯
         arrival_time = current_time + datetime.timedelta(minutes=travel_min)
+        arrival_time = round_time_to_15_mins(arrival_time)
 
         if not had_lunch_today and (arrival_time.hour >= 12 or (arrival_time.hour == 11 and arrival_time.minute >= 45)):
             arrival_time += datetime.timedelta(minutes=LUNCH_DURATION)
@@ -255,17 +275,15 @@ col_g1, col_g2 = col_cond4.columns([1, 2])
 group_name = col_g1.selectbox("組別", ["A", "B", "C"])
 leader_info = col_g2.text_input("領隊電話", value="賴承農 0963")
 
-# 組合雙軌資料，建立編輯器內容
 editor_data = []
 for sid in raw_ids:
     geo_item = st.session_state.geojson_db.get(sid, {})
     hist_item = st.session_state.history_db.get(sid, {})
     
-    county = geo_item.get("county") or hist_item.get("county") or "待查"
+    county = geo_item.get("county") or hist_item.get("county") or guess_county_from_id(sid)
     town = geo_item.get("town") or hist_item.get("town") or ""
     village = geo_item.get("village") or hist_item.get("village") or ""
     
-    # 決定會合地點：優先取用歷史 DB，沒有再用 GeoJSON Mark
     if "location" in hist_item and hist_item["location"]:
         location = hist_item["location"]
         source = "HISTORICAL_DB"
@@ -306,7 +324,6 @@ edited_streams_df = st.data_editor(
     key="stream_master_editor"
 )
 
-# 準備供演算法的清單
 parsed_streams = []
 for idx, row in edited_streams_df.iterrows():
     parsed_streams.append({
@@ -337,7 +354,7 @@ if "schedule_data" in st.session_state:
     col_m1.metric("待勘總溪流", f"{len(st.session_state.get('schedule_data', []))} 條")
     col_m2.metric("規劃總天數", f"{len(st.session_state.get('daily_routes', []))} 天")
     col_m3.metric("系統判定交通模式", st.session_state.get("transit_mode", "判定中"))
-    col_m4.metric("工作節奏設定", "1.5h現勘 / 1h午休")
+    col_m4.metric("工作節奏設定", "每站停留 1.5h / 逢 15 分進位")
 
     df_view = pd.DataFrame(st.session_state["schedule_data"])
     display_cols = ["自訂排序", "項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點"]
