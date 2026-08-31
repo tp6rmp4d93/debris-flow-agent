@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>土石流潛勢溪流現勘智慧排程系統 v2.4 (Turso Cloud 連動版)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SheetJS for Excel Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft JhengHei", sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+    <!-- 頂部導航欄 -->
+    <header class="bg-emerald-800 text-white shadow-md">
+        <div class="max-w-7xl mx-auto px-4 py-3.5 sm:px-6 lg:px-8 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <i class="ph-fill ph-mountains text-3xl text-emerald-300"></i>
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight">土石流潛勢溪流現勘智慧排程系統 <span class="text-xs bg-emerald-600 px-2 py-0.5 rounded font-normal">v2.4 Turso</span></h1>
+                    <p class="text-xs text-emerald-200">農業部農村發展及水土保持署 現調自動化排程模組</p>
+                </div>
+            </div>
+            <!-- Turso 連線設定按鈕 -->
+            <div class="flex items-center space-x-2">
+                <button onclick="openTursoModal()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg border border-emerald-500 flex items-center space-x-1.5 transition">
+                    <i class="ph-bold ph-database text-sm"></i>
+                    <span id="tursoStatusText">Turso 連線設定</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+
+        <!-- 資料庫載入與設定卡片 -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 border-b border-slate-100 gap-2">
+                <h2 class="text-sm font-bold text-slate-700 flex items-center">
+                    <i class="ph-bold ph-sliders-horizontal text-emerald-600 mr-2 text-base"></i>
+                    現勘任務與出發參數設定
+                </h2>
+                <!-- 上傳 stream_database.json -->
+                <div class="flex items-center space-x-2 text-xs">
+                    <span class="text-slate-500">主資料庫狀態:</span>
+                    <span id="dbStatusBadge" class="bg-amber-100 text-amber-800 font-semibold px-2 py-0.5 rounded">內建示範庫 (9筆)</span>
+                    <label class="cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded border border-slate-300 flex items-center space-x-1 transition">
+                        <i class="ph-bold ph-upload-simple"></i>
+                        <span>載入 stream_database.json</span>
+                        <input type="file" id="jsonFileInput" accept=".json" class="hidden" onchange="handleJsonUpload(event)">
+                    </label>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">出發地點</label>
+                    <input type="text" id="startLocation" value="台北高鐵站" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="如: 台北高鐵站, 南投分署">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">現勘起始日期</label>
+                    <input type="date" id="startDate" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">每日出發時間</label>
+                    <input type="time" id="startTime" value="07:30" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">組別 / 領隊聯絡人</label>
+                    <div class="flex space-x-2">
+                        <select id="groupName" class="w-24 px-2 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                            <option value="A">A 組</option>
+                            <option value="B">B 組</option>
+                            <option value="C">C 組</option>
+                        </select>
+                        <input type="text" id="leaderName" value="賴承農 (0963-663193)" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 土石流編號輸入區 -->
+            <div class="mt-4">
+                <div class="flex justify-between items-center mb-1">
+                    <label class="text-xs font-semibold text-slate-600">待勘溪流編號 (以逗點分隔，每日以 3 條為上限自動跨日)</label>
+                    <div class="space-x-3 text-xs">
+                        <button onclick="loadSampleData('south')" class="text-emerald-600 hover:text-emerald-800 font-medium">＋ 南部跨區範例 (7條)</button>
+                        <button onclick="loadSampleData('central')" class="text-blue-600 hover:text-blue-800 font-medium">＋ 中部跨區範例 (5條)</button>
+                    </div>
+                </div>
+                <textarea id="streamInput" rows="2" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono" placeholder="南市DF038, 南市DF039, 南市DF043, 南市DF033, 南市DF034, 南市DF032, 屏縣DF074"></textarea>
+            </div>
+
+            <!-- 操作按鈕區 -->
+            <div class="mt-4 flex justify-end">
+                <button onclick="calculateSchedule(true)" class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-6 py-2.5 rounded-lg shadow-sm flex items-center space-x-2 transition">
+                    <i class="ph-bold ph-lightning text-base"></i>
+                    <span>開始智慧路徑規劃與排程</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- 行程預覽與手動調整區 -->
+        <section id="resultSection" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hidden">
+            
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
+                <div>
+                    <h2 class="text-base font-semibold text-slate-800 flex items-center">
+                        <i class="ph-bold ph-calendar-check text-emerald-600 mr-2 text-lg"></i>
+                        現勘行程表預覽與微調
+                    </h2>
+                    <p class="text-xs text-slate-500 mt-0.5">可在「自訂排序」輸入數字調換點位，點擊「套用排序重算」即可自動重新分配每日行程與會合時間。</p>
+                </div>
+                
+                <!-- 功能按鈕群 -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="calculateSchedule(false)" class="bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow-sm flex items-center space-x-1.5 transition">
+                        <i class="ph-bold ph-arrows-clockwise text-sm"></i>
+                        <span>套用排序重算</span>
+                    </button>
+                    <button onclick="savePlanToTurso()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow-sm flex items-center space-x-1.5 transition">
+                        <i class="ph-bold ph-cloud-arrow-up text-sm"></i>
+                        <span>儲存至 Turso 雲端庫</span>
+                    </button>
+                    <button onclick="exportToExcel()" class="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow-sm flex items-center space-x-1.5 transition">
+                        <i class="ph-bold ph-file-xls text-sm"></i>
+                        <span>匯出公文行程表 (.xlsx)</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 摘要看板 -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div class="text-xs text-slate-500">待勘總溪流數</div>
+                    <div id="statTotalStreams" class="text-base font-bold text-slate-800">0 條</div>
+                </div>
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div class="text-xs text-slate-500">規劃總天數</div>
+                    <div id="statTotalDays" class="text-base font-bold text-emerald-600">0 天</div>
+                </div>
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div class="text-xs text-slate-500">交通轉乘模式</div>
+                    <div id="statTransitMode" class="text-xs font-semibold text-blue-600 mt-1">高鐵+租車 (15分手續)</div>
+                </div>
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div class="text-xs text-slate-500">停留 / 午休設定</div>
+                    <div class="text-xs font-semibold text-slate-700 mt-1">1.5 hr / 1.0 hr (跨12:00)</div>
+                </div>
+            </div>
+
+            <!-- 預覽資料表格 -->
+            <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                <table class="w-full text-xs text-left text-slate-700">
+                    <thead class="text-xs text-slate-600 uppercase bg-slate-100 border-b border-slate-200">
+                        <tr>
+                            <th class="px-2 py-3 text-center w-16">自訂排序</th>
+                            <th class="px-2 py-3 text-center w-12">項次</th>
+                            <th class="px-2 py-3 text-center w-12">組別</th>
+                            <th class="px-3 py-3">縣市</th>
+                            <th class="px-3 py-3">鄉鎮市區</th>
+                            <th class="px-3 py-3">村里</th>
+                            <th class="px-3 py-3">溪流編號</th>
+                            <th class="px-4 py-3">回報原因</th>
+                            <th class="px-4 py-3">會合時間</th>
+                            <th class="px-4 py-3">會合地點 (含座標)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="scheduleTableBody" class="divide-y divide-slate-200">
+                        <!-- 動態插入列 -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Google Maps 各日導航路徑 -->
+            <div class="mt-6 bg-slate-50 border border-slate-200 rounded-lg p-4">
+                <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center mb-3">
+                    <i class="ph-bold ph-navigation-arrow text-blue-600 mr-1.5 text-base"></i>
+                    各日 Google Maps 車機/手機多點導航路徑
+                </h3>
+                <div id="googleMapsRoutes" class="space-y-2">
+                    <!-- 動態產生按鈕 -->
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Turso 連線設定 Modal -->
+    <div id="tursoModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div class="flex justify-between items-center pb-2 border-b border-slate-100">
+                <h3 class="text-sm font-bold text-slate-800 flex items-center">
+                    <i class="ph-bold ph-database text-emerald-600 mr-2"></i>
+                    Turso LibSQL 雲端連線設定
+                </h3>
+                <button onclick="closeTursoModal()" class="text-slate-400 hover:text-slate-600 text-lg">&times;</button>
+            </div>
+            <div class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Turso Database URL (HTTP Endpoint)</label>
+                    <input type="text" id="tursoDbUrl" class="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="https://my-db-org.turso.io">
+                    <p class="text-[10px] text-slate-400 mt-0.5">格式範例: https://[your-db]-[your-org].turso.io</p>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Turso Auth Token (JWT Token)</label>
+                    <input type="password" id="tursoAuthToken" class="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="eyJhbGciOiJFZERTQ...">
+                </div>
+            </div>
+            <div class="flex justify-between items-center pt-2">
+                <button onclick="testTursoConnection()" class="text-xs text-blue-600 hover:underline">測試連線狀態</button>
+                <div class="space-x-2">
+                    <button onclick="closeTursoModal()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg">取消</button>
+                    <button onclick="saveTursoConfig()" class="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm">儲存設定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 核心排程、Turso API 與 Excel 匯出腳本 -->
+    <script>
+        // 1. 內建基礎示範資料庫 (由 survey_db_builder.py v2.4 自動延伸)
+        let activeDatabase = {
+            "南市DF038": { county: "臺南市", town: "南化區", village: "關山里", reason: "申請調整風險等級(114年度集水區具新生崩塌地)", location: "南179線關山十六號橋", dms: "23°12'50.5\"N 120°36'33.6\"E", lat: 23.214028, lng: 120.609333, region: "south", hsr: "台南高鐵站" },
+            "南市DF039": { county: "臺南市", town: "南化區", village: "關山里", reason: "申請調整風險等級(114年度集水區具新生崩塌地)", location: "南179線關山十四號橋", dms: "23°11'23.2\"N 120°36'2.8\"E", lat: 23.189778, lng: 120.600778, region: "south", hsr: "台南高鐵站" },
+            "南市DF043": { county: "臺南市", town: "南化區", village: "關山里", reason: "申請調整風險等級(距前次更新已逾15年且具保全住戶)", location: "南179-1線無名橋", dms: "23°11'31.8\"N 120°37'7.7\"E", lat: 23.192167, lng: 120.618806, region: "south", hsr: "台南高鐵站" },
+            "南市DF033": { county: "臺南市", town: "楠西區", village: "龜丹里", reason: "申請調整風險等級(距前次更新已逾15年且具保全住戶)", location: "鐵谷山宮", dms: "23°7'43.9\"N 120°31'28.9\"E", lat: 23.128861, lng: 120.524694, region: "south", hsr: "台南高鐵站" },
+            "南市DF034": { county: "臺南市", town: "楠西區", village: "灣丘里", reason: "申請調整風險等級(114年度集水區具新生崩塌地)", location: "妙玄宮", dms: "23°9'47.1\"N 120°32'2.4\"E", lat: 23.163083, lng: 120.534000, region: "south", hsr: "台南高鐵站" },
+            "南市DF032": { county: "臺南市", town: "楠西區", village: "照興里", reason: "申請調整風險等級(114年度集水區具新生崩塌地)", location: "坑尾農路箱涵", dms: "23°12'3.4\"N 120°28'18\"E", lat: 23.200944, lng: 120.471667, region: "south", hsr: "台南高鐵站" },
+            "屏縣DF074": { county: "屏東縣", town: "來義鄉", village: "南和村", reason: "二次災害高風險區複勘", location: "白鷺二號橋", dms: "22°26'40\"N 120°39'40.8\"E", lat: 22.444444, lng: 120.661333, region: "south", hsr: "左營高鐵站" },
+            "高市E115-1": { county: "高雄市", town: "美濃區", village: "福安里", reason: "新增疑似土石流災害(地方政府提報)", location: "雲自在禪院", dms: "22°53'57.5\"N 120°30'47.6\"E", lat: 22.899306, lng: 120.513222, region: "south", hsr: "左營高鐵站" },
+            "高市SL0002": { county: "高雄市", town: "茂林區", village: "茂林里", reason: "二次災害高風險區複勘", location: "茂林情人谷溫泉", dms: "22°53'04.1\"N 120°39'55.3\"E", lat: 22.884472, lng: 120.665361, region: "south", hsr: "左營高鐵站" }
+        };
+
+        const HSR_STATIONS = {
+            "台南高鐵站": { lat: 22.9248, lng: 120.2858, hsr_time_from_tpe: 90 },
+            "左營高鐵站": { lat: 22.6874, lng: 120.3078, hsr_time_from_tpe: 105 },
+            "台中高鐵站": { lat: 24.1121, lng: 120.6160, hsr_time_from_tpe: 55 },
+            "嘉義高鐵站": { lat: 23.4590, lng: 120.3235, hsr_time_from_tpe: 75 },
+            "花蓮火車站": { lat: 23.9933, lng: 121.6015, hsr_time_from_tpe: 130 },
+            "台東火車站": { lat: 22.7933, lng: 121.1232, hsr_time_from_tpe: 210 }
+        };
+
+        let currentScheduleData = [];
+        let dailyRoutesList = [];
+        let currentPlanSummary = {};
+
+        // 初始化
+        window.addEventListener('DOMContentLoaded', () => {
+            const today = new Date();
+            document.getElementById('startDate').value = today.toISOString().split('T')[0];
+            loadTursoConfigFromStorage();
+        });
+
+        // 載入使用者上傳的 stream_database.json
+        function handleJsonUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const parsed = JSON.parse(event.target.result);
+                    activeDatabase = parsed;
+                    const count = Object.keys(parsed).length;
+                    const badge = document.getElementById('dbStatusBadge');
+                    badge.className = "bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded";
+                    badge.innerText = `已載入完整資料庫 (${count} 筆)`;
+                    alert(`✅ 成功載入 stream_database.json！共收錄 ${count} 條溪流會合點資訊。`);
+                } catch (err) {
+                    alert("❌ JSON 格式解析失敗，請確認檔案內容正確。");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function loadSampleData(type) {
+            if (type === 'south') {
+                document.getElementById('streamInput').value = "南市DF038, 南市DF039, 南市DF043, 南市DF033, 南市DF034, 南市DF032, 屏縣DF074";
+                document.getElementById('startLocation').value = "台北高鐵站";
+                document.getElementById('startTime').value = "07:30";
+            } else {
+                document.getElementById('streamInput').value = "投縣DF106, 投縣DF105, 投縣DF101, 中市DF107, 中市DF105";
+                document.getElementById('startLocation').value = "台北高鐵站";
+                document.getElementById('startTime').value = "07:30";
+            }
+        }
+
+        function estimateDriveTimeMinutes(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            const distKm = R * c;
+            const drivingTimeMin = (distKm * 1.4 / 35) * 60; // 山區蜿蜒與速限估算
+            return Math.max(15, Math.round(drivingTimeMin));
+        }
+
+        // 核心排程計算
+        function calculateSchedule(isInitialAutoSort = true) {
+            const streamInputText = document.getElementById('streamInput').value.trim();
+            if (!streamInputText) {
+                alert("請輸入待勘溪流編號！");
+                return;
+            }
+
+            const rawStreamIds = streamInputText.split(/[,，\s\n]+/).filter(id => id.length > 0);
+            const startLocation = document.getElementById('startLocation').value;
+            const startDateStr = document.getElementById('startDate').value;
+            const startTimeStr = document.getElementById('startTime').value;
+            const groupName = document.getElementById('groupName').value;
+            const leaderInfo = document.getElementById('leaderName').value;
+
+            if (!startDateStr) {
+                alert("請選擇現勘起始日期！");
+                return;
+            }
+
+            let streams = [];
+            if (isInitialAutoSort) {
+                rawStreamIds.forEach((id, idx) => {
+                    const dbItem = activeDatabase[id] || {
+                        county: "待查", town: "待查", village: "待查",
+                        reason: "申請調整風險等級", location: `${id}交會處`, dms: "23°00'00\"N 120°30'00\"E",
+                        lat: 23.2, lng: 120.6, region: "south", hsr: "台南高鐵站", source: "NEED_GIS_OR_MANUAL"
+                    };
+                    streams.push({ order: idx + 1, stream_id: id, ...dbItem });
+                });
+            } else {
+                const rows = document.querySelectorAll('#scheduleTableBody tr');
+                rows.forEach(row => {
+                    const orderInput = row.querySelector('.seq-input');
+                    const streamId = row.getAttribute('data-stream-id');
+                    const orderVal = parseInt(orderInput.value, 10) || 999;
+                    const dbItem = activeDatabase[streamId] || {
+                        county: "待查", town: "待查", village: "待查",
+                        reason: "申請調整風險等級", location: `${streamId}交會處`, dms: "23°00'00\"N 120°30'00\"E",
+                        lat: 23.2, lng: 120.6, region: "south", hsr: "台南高鐵站", source: "NEED_GIS_OR_MANUAL"
+                    };
+                    streams.push({ order: orderVal, stream_id: streamId, ...dbItem });
+                });
+                streams.sort((a, b) => a.order - b.order);
+            }
+
+            const MAX_PER_DAY = 3;
+            const SURVEY_DURATION = 90; // 1.5 hr
+            const LUNCH_DURATION = 60;  // 1.0 hr
+            const CAR_RENTAL_BUFFER = 15; // 租車 15 分鐘
+
+            let scheduleList = [];
+            dailyRoutesList = [];
+
+            let currentDayIdx = 0;
+            let currentDayDate = new Date(`${startDateStr}T${startTimeStr}:00`);
+            let dailyCount = 0;
+            let currentTime = new Date(currentDayDate);
+            let currentCoords = null;
+            let hadLunchToday = false;
+            let dayWaypoints = [];
+
+            streams.forEach((stream, index) => {
+                // 每 3 條跨日
+                if (dailyCount >= MAX_PER_DAY) {
+                    dailyRoutesList.push({ day: currentDayIdx + 1, date: new Date(currentDayDate), waypoints: [...dayWaypoints] });
+                    dayWaypoints = [];
+
+                    currentDayIdx += 1;
+                    dailyCount = 0;
+                    hadLunchToday = false;
+                    currentDayDate.setDate(currentDayDate.getDate() + 1);
+                    currentTime = new Date(currentDayDate);
+                    currentTime.setHours(8, 30, 0, 0); // 隔日 08:30 出發
+                }
+
+                // 判斷交通轉乘模式 (首日台北出發至中南部/東部)
+                if (currentDayIdx === 0 && dailyCount === 0) {
+                    const isFromNorth = startLocation.includes("台北") || startLocation.includes("新北");
+                    if (isFromNorth && (stream.region === "south" || stream.region === "central" || stream.region === "east")) {
+                        const hsrInfo = HSR_STATIONS[stream.hsr] || HSR_STATIONS["台南高鐵站"];
+                        currentTime = new Date(currentTime.getTime() + (hsrInfo.hsr_time_from_tpe + CAR_RENTAL_BUFFER) * 60000);
+                        currentCoords = { lat: hsrInfo.lat, lng: hsrInfo.lng, name: stream.hsr };
+                        dayWaypoints.push({ name: stream.hsr, lat: hsrInfo.lat, lng: hsrInfo.lng });
+                    } else {
+                        currentCoords = { lat: stream.lat, lng: stream.lng, name: startLocation };
+                        dayWaypoints.push({ name: startLocation, lat: stream.lat, lng: stream.lng });
+                    }
+                }
+
+                let travelMinutes = 30;
+                if (currentCoords) {
+                    travelMinutes = estimateDriveTimeMinutes(currentCoords.lat, currentCoords.lng, stream.lat, stream.lng);
+                }
+
+                let arrivalTime = new Date(currentTime.getTime() + travelMinutes * 60000);
+
+                // 午休判斷 (跨越 12:00)
+                if (!hadLunchToday && (arrivalTime.getHours() >= 12 || (arrivalTime.getHours() === 11 && arrivalTime.getMinutes() >= 45))) {
+                    arrivalTime = new Date(arrivalTime.getTime() + LUNCH_DURATION * 60000);
+                    hadLunchToday = true;
+                }
+
+                let leaveTime = new Date(arrivalTime.getTime() + SURVEY_DURATION * 60000);
+
+                const twYear = arrivalTime.getFullYear() - 1911;
+                const mm = String(arrivalTime.getMonth() + 1).padStart(2, '0');
+                const dd = String(arrivalTime.getDate()).padStart(2, '0');
+                const hh = String(arrivalTime.getHours()).padStart(2, '0');
+                const min = String(arrivalTime.getMinutes()).padStart(2, '0');
+                const ampm = arrivalTime.getHours() < 12 ? "AM" : "PM";
+                const meetingTimeFormatted = `${twYear}/${mm}/${dd}\n${ampm}${hh}:${min}`;
+
+                scheduleList.push({
+                    customOrder: index + 1,
+                    itemIdx: index + 1,
+                    group: groupName,
+                    county: stream.county,
+                    town: stream.town,
+                    village: stream.village,
+                    stream_id: stream.stream_id,
+                    reason: stream.reason,
+                    meetingTime: meetingTimeFormatted,
+                    meetingLocation: `${stream.location}\n(${stream.dms})`,
+                    location_name: stream.location,
+                    coords_dms: stream.dms,
+                    lat: stream.lat,
+                    lng: stream.lng,
+                    source: stream.source || "HISTORICAL_PDF",
+                    dayIndex: currentDayIdx + 1
+                });
+
+                dayWaypoints.push({ name: stream.location, lat: stream.lat, lng: stream.lng });
+                currentCoords = { lat: stream.lat, lng: stream.lng, name: stream.location };
+                currentTime = leaveTime;
+                dailyCount += 1;
+            });
+
+            if (dayWaypoints.length > 0) {
+                dailyRoutesList.push({ day: currentDayIdx + 1, date: new Date(currentDayDate), waypoints: [...dayWaypoints] });
+            }
+
+            // 儲存當前規劃母檔摘要
+            const nowTs = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+            currentPlanSummary = {
+                plan_id: `PLAN-${nowTs}-${groupName}`,
+                start_location: startLocation,
+                start_date: startDateStr,
+                start_time: startTimeStr,
+                group_name: groupName,
+                leader_info: leaderInfo,
+                total_streams: scheduleList.length,
+                total_days: dailyRoutesList.length,
+                raw_input_streams: streamInputText
+            };
+
+            currentScheduleData = scheduleList;
+            renderPreviewTable(scheduleList);
+            renderGoogleMapsRoutes(dailyRoutesList);
+        }
+
+        function renderPreviewTable(data) {
+            const tbody = document.getElementById('scheduleTableBody');
+            tbody.innerHTML = '';
+
+            data.forEach((row, idx) => {
+                const tr = document.createElement('tr');
+                tr.className = idx % 2 === 0 ? "bg-white hover:bg-slate-50" : "bg-slate-50/50 hover:bg-slate-100/50";
+                tr.setAttribute('data-stream-id', row.stream_id);
+
+                tr.innerHTML = `
+                    <td class="px-2 py-3 text-center">
+                        <input type="number" class="seq-input w-12 px-1.5 py-1 text-center font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded focus:bg-white focus:ring-2 focus:ring-emerald-500 text-xs" value="${idx + 1}" min="1" max="99">
+                    </td>
+                    <td class="px-2 py-3 text-center font-semibold text-slate-500">${row.itemIdx}</td>
+                    <td class="px-2 py-3 text-center font-bold text-slate-700">${row.group}</td>
+                    <td class="px-3 py-3">${row.county}</td>
+                    <td class="px-3 py-3 font-medium">${row.town}</td>
+                    <td class="px-3 py-3 text-slate-600">${row.village}</td>
+                    <td class="px-3 py-3 font-mono font-bold text-emerald-800">${row.stream_id}</td>
+                    <td class="px-4 py-3 text-slate-600 leading-tight">${row.reason}</td>
+                    <td class="px-4 py-3 font-medium whitespace-pre-line text-blue-800">${row.meetingTime}</td>
+                    <td class="px-4 py-3 whitespace-pre-line text-slate-700">${row.meetingLocation}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('statTotalStreams').innerText = `${data.length} 條`;
+            document.getElementById('statTotalDays').innerText = `${dailyRoutesList.length} 天`;
+            document.getElementById('resultSection').classList.remove('hidden');
+        }
+
+        function renderGoogleMapsRoutes(days) {
+            const container = document.getElementById('googleMapsRoutes');
+            container.innerHTML = '';
+            let gmapsUrls = [];
+
+            days.forEach(day => {
+                if (day.waypoints.length < 2) return;
+
+                const origin = `${day.waypoints[0].lat},${day.waypoints[0].lng}`;
+                const dest = `${day.waypoints[day.waypoints.length - 1].lat},${day.waypoints[day.waypoints.length - 1].lng}`;
+                let waypointsParam = "";
+                if (day.waypoints.length > 2) {
+                    const midPoints = day.waypoints.slice(1, day.waypoints.length - 1);
+                    waypointsParam = `&waypoints=${midPoints.map(p => `${p.lat},${p.lng}`).join('|')}`;
+                }
+
+                const gmapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${waypointsParam}&travelmode=driving`;
+                gmapsUrls.push({ day: day.day, url: gmapsUrl });
+
+                const twYear = day.date.getFullYear() - 1911;
+                const dateStr = `${twYear}/${String(day.date.getMonth()+1).padStart(2,'0')}/${String(day.date.getDate()).padStart(2,'0')}`;
+
+                const div = document.createElement('div');
+                div.className = "flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm gap-2";
+                div.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <span class="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-xs">第 ${day.day} 天 (${dateStr})</span>
+                        <span class="text-xs text-slate-600 font-medium">${day.waypoints.map(p => p.name).join(' ➔ ')}</span>
+                    </div>
+                    <div>
+                        <a href="${gmapsUrl}" target="_blank" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded flex items-center space-x-1 transition">
+                            <i class="ph-bold ph-map-pin text-sm"></i>
+                            <span>開啟 Google Map 導航</span>
+                        </a>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+
+            currentPlanSummary.daily_gmaps_urls = JSON.stringify(gmapsUrls);
+        }
+
+        // ==============================================================================
+        // Turso HTTP API 雲端連線與資料儲存
+        // ==============================================================================
+        function openTursoModal() {
+            document.getElementById('tursoModal').classList.remove('hidden');
+        }
+        function closeTursoModal() {
+            document.getElementById('tursoModal').classList.add('hidden');
+        }
+
+        function saveTursoConfig() {
+            const url = document.getElementById('tursoDbUrl').value.trim().replace(/\/$/, "");
+            const token = document.getElementById('tursoAuthToken').value.trim();
+            localStorage.setItem("turso_db_url", url);
+            localStorage.setItem("turso_auth_token", token);
+            updateTursoBadge(url, token);
+            closeTursoModal();
+            alert("✅ Turso 連線參數已儲存於瀏覽器中！");
+        }
+
+        function loadTursoConfigFromStorage() {
+            const url = localStorage.getItem("turso_db_url") || "";
+            const token = localStorage.getItem("turso_auth_token") || "";
+            document.getElementById('tursoDbUrl').value = url;
+            document.getElementById('tursoAuthToken').value = token;
+            updateTursoBadge(url, token);
+        }
+
+        function updateTursoBadge(url, token) {
+            const btn = document.getElementById('tursoStatusText');
+            if (url && token) {
+                btn.innerHTML = `Turso: <span class="text-emerald-300 font-semibold">已配置</span>`;
+            } else {
+                btn.innerHTML = `Turso: <span class="text-slate-300">未連線</span>`;
+            }
+        }
+
+        async function executeTursoPipeline(statements) {
+            const url = localStorage.getItem("turso_db_url");
+            const token = localStorage.getItem("turso_auth_token");
+            if (!url || !token) {
+                throw new Error("尚未設定 Turso 連線 URL 或 Auth Token，請先點擊右上角「Turso 連線設定」！");
+            }
+
+            const endpoint = `${url}/v2/pipeline`;
+            const requests = statements.map(stmt => ({
+                type: "execute",
+                stmt: {
+                    sql: stmt.sql,
+                    args: (stmt.args || []).map(val => {
+                        if (val === null || val === undefined) return { type: "null" };
+                        if (typeof val === "number") return Number.isInteger(val) ? { type: "integer", value: String(val) } : { type: "float", value: val };
+                        return { type: "text", value: String(val) };
+                    })
+                }
+            }));
+
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ requests })
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Turso HTTP 錯誤 (${response.status}): ${errText}`);
+            }
+
+            return await response.json();
+        }
+
+        async function testTursoConnection() {
+            try {
+                await executeTursoPipeline([{ sql: "SELECT 1;" }]);
+                alert("🎉 Turso 連線測試成功！伺服器回應正常。");
+            } catch (err) {
+                alert(`❌ Turso 連線失敗:\n${err.message}`);
+            }
+        }
+
+        async function savePlanToTurso() {
+            if (!currentScheduleData || currentScheduleData.length === 0) {
+                alert("目前無可儲存的排程結果！");
+                return;
+            }
+
+            try {
+                const stmts = [];
+                // 1. 寫入母單
+                stmts.push({
+                    sql: `INSERT INTO web_survey_plans 
+                          (plan_id, start_location, start_date, start_time, group_name, leader_info, total_streams, total_days, raw_input_streams, daily_gmaps_urls)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+                    args: [
+                        currentPlanSummary.plan_id,
+                        currentPlanSummary.start_location,
+                        currentPlanSummary.start_date,
+                        currentPlanSummary.start_time,
+                        currentPlanSummary.group_name,
+                        currentPlanSummary.leader_info,
+                        currentPlanSummary.total_streams,
+                        currentPlanSummary.total_days,
+                        currentPlanSummary.raw_input_streams,
+                        currentPlanSummary.daily_gmaps_urls
+                    ]
+                });
+
+                // 2. 寫入各節點明細
+                currentScheduleData.forEach(item => {
+                    stmts.push({
+                        sql: `INSERT INTO web_survey_plan_nodes 
+                              (plan_id, day_no, item_order, custom_order, stream_id, county, town, village, reason, meeting_time, meeting_location, coords_dms, latitude, longitude, data_source)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+                        args: [
+                            currentPlanSummary.plan_id,
+                            item.dayIndex,
+                            item.itemIdx,
+                            item.customOrder,
+                            item.stream_id,
+                            item.county,
+                            item.town,
+                            item.village,
+                            item.reason,
+                            item.meetingTime,
+                            item.location_name,
+                            item.coords_dms,
+                            item.lat,
+                            item.lng,
+                            item.source
+                        ]
+                    });
+                });
+
+                await executeTursoPipeline(stmts);
+                alert(`🎉 規劃紀錄已成功儲存至 Turso 雲端資料庫！\n規劃單號: ${currentPlanSummary.plan_id}\n明細筆數: ${currentScheduleData.length} 筆`);
+            } catch (err) {
+                alert(`❌ 儲存至 Turso 失敗:\n${err.message}`);
+            }
+        }
+
+        // 匯出至 Excel
+        function exportToExcel() {
+            if (!currentScheduleData || currentScheduleData.length === 0) {
+                alert("無可匯出的排程資料！");
+                return;
+            }
+
+            const groupVal = document.getElementById('groupName').value;
+            const excelRows = currentScheduleData.map(item => ({
+                "項次": item.itemIdx,
+                "組別": item.group,
+                "縣市": item.county,
+                "鄉鎮市區": item.town,
+                "村里": item.village,
+                "編號": item.stream_id,
+                "回報原因": item.reason,
+                "會合時間": item.meetingTime,
+                "會合地點": item.meetingLocation
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(excelRows);
+            ws['!cols'] = [
+                { wch: 6 }, { wch: 6 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
+                { wch: 14 }, { wch: 36 }, { wch: 18 }, { wch: 38 }
+            ];
+
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "現勘行程表");
+            XLSX.writeFile(wb, `115年新增及調整土石流潛勢溪流現調行程表_${groupVal}組.xlsx`);
+        }
+    </script>
+</body>
+</html>
