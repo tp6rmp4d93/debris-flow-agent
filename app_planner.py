@@ -140,7 +140,6 @@ def estimate_drive_time_minutes(lat1, lon1, lat2, lon2):
     return max(15, round((dist_km * 1.4 / 35.0) * 60))
 
 def round_time_to_15_mins(dt):
-    """將時間四捨五入至最接近的 15、30、45、00 分"""
     minutes = dt.minute
     rounded_minutes = round(minutes / 15.0) * 15
     return dt.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=rounded_minutes)
@@ -204,7 +203,6 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
         if current_day_idx == 0 and daily_count == 0 and "自駕" in list(transport_modes_used)[0]:
             travel_min = max(60, travel_min)
 
-        # 檢測是否長途車程 (> 1.5小時)
         is_long_drive = travel_min > 90
 
         arrival_time = current_time + datetime.timedelta(minutes=travel_min)
@@ -216,7 +214,6 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
 
         leave_time = arrival_time + datetime.timedelta(minutes=SURVEY_DURATION)
         
-        # 檢測是否超過下午 4 點 (16:00)
         is_late = arrival_time.time() > datetime.time(16, 0)
 
         tw_year = arrival_time.year - 1911
@@ -335,15 +332,14 @@ for idx, row in edited_streams_df.iterrows():
     sid = row["溪流編號"]
     loc = row["會合地點"]
     
-    # 【防呆機制】若使用者將地點清空，自動自圖資庫帶回原始 Mark 點位
     if pd.isna(loc) or str(loc).strip() == "":
         geo_item = st.session_state.geojson_db.get(sid, {})
         loc = geo_item.get("mark", f"{sid}交會處")
 
-    if sid not in st.session_state.stream_db:
-        st.session_state.stream_db[sid] = {}
+    if sid not in st.session_state.history_db:
+        st.session_state.history_db[sid] = {}
         
-    st.session_state.stream_db[sid].update({
+    st.session_state.history_db[sid].update({
         "county": row["縣市"], "town": row["鄉鎮市區"], "village": row["村里"],
         "reason": row["回報原因"], "location": loc,
         "lat": row["lat"], "lng": row["lng"], "dms": row["dms"],
@@ -374,7 +370,6 @@ if "schedule_data" in st.session_state:
     st.markdown("---")
     st.subheader("步驟三：現勘排程預覽與路徑匯出")
 
-    # 檢測並顯示視覺警示
     has_late = any(item.get("is_late") for item in st.session_state["schedule_data"])
     has_long_drive = any(item.get("is_long_drive") for item in st.session_state["schedule_data"])
 
@@ -392,7 +387,6 @@ if "schedule_data" in st.session_state:
     df_view = pd.DataFrame(st.session_state["schedule_data"])
     display_cols = ["自訂排序", "項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點", "is_late"]
     
-    # 套用 Pandas Styler 黃色高亮超時的點位
     def highlight_schedule(row):
         if row.get('is_late'):
             return ['background-color: #ffe066; color: #856404'] * len(row)
@@ -410,7 +404,7 @@ if "schedule_data" in st.session_state:
                 "自訂排序": st.column_config.NumberColumn(min_value=1, max_value=99, step=1, required=True),
                 "會合時間": st.column_config.TextColumn(width="medium"),
                 "會合地點": st.column_config.TextColumn(width="large"),
-                "is_late": None  # 在介面上隱藏布林值判定欄
+                "is_late": None
             },
             disabled=["項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點"],
             use_container_width=True,
