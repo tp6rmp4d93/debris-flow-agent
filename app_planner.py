@@ -144,10 +144,30 @@ def round_time_to_15_mins(dt):
     rounded_minutes = round(minutes / 15.0) * 15
     return dt.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=rounded_minutes)
 
+def parse_custom_location(input_str):
+    """智慧判斷使用者輸入為純文字、經緯度還是 Google Maps 連結"""
+    if not input_str:
+        return None, None, "empty"
+    
+    lat_pattern = r'(2[1-6]\.\d+)'
+    lng_pattern = r'(119\.\d+|12[0-2]\.\d+)'
+    
+    # 1. 擷取 Google Maps 連結內的座標 (如 @24.123,121.456)
+    url_match = re.search(fr'@{lat_pattern},{lng_pattern}', input_str)
+    if url_match:
+        return float(url_match.group(1)), float(url_match.group(2)), "url"
+        
+    # 2. 擷取純經緯度 (如 24.12345, 121.12345)
+    coord_match = re.search(fr'{lat_pattern}[^\d\.A-Za-z]+{lng_pattern}', input_str)
+    if coord_match:
+        return float(coord_match.group(1)), float(coord_match.group(2)), "coord"
+        
+    return None, None, "text"
+
 # ==============================================================================
 # 3. 核心排程引擎
 # ==============================================================================
-def run_schedule_simulation(stream_list, start_loc, start_date, start_time, group_name):
+def run_schedule_simulation(stream_list, start_locations_list, start_date, start_time, group_name):
     MAX_PER_DAY = 3
     SURVEY_DURATION = 90
     LUNCH_DURATION = 60
@@ -164,10 +184,9 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
     current_coords = None
     had_lunch_today = False
     day_waypoints = []
-    
-    start_county = extract_county_from_text(start_loc)
 
     for idx, stream in enumerate(stream_list):
+        # 切換隔日
         if daily_count >= MAX_PER_DAY:
             daily_routes.append({"day": current_day_idx + 1, "date": current_day_date.date(), "waypoints": list(day_waypoints)})
             day_waypoints = []
@@ -175,9 +194,13 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
             daily_count = 0
             had_lunch_today = False
             current_day_date = current_day_date + datetime.timedelta(days=1)
-            current_time = datetime.datetime.combine(current_day_date.date(), datetime.time(8, 30))
+            # 每日時間重置為使用者填寫的時間
+            current_time = datetime.datetime.combine(current_day_date.date(), start_time)
 
-        if current_day_idx == 0 and daily_count == 0:
+        # 每日首站出發點
+        if daily_count == 0:
+            day_start_loc = start_locations_list[current_day_idx] if current_day_idx < len(start_locations_list) else start_locations_list[-1]
+            start_county = extract_county_from_text(day_start_loc)
             target_county = stream.get("county", "")
             
             is_adjacent = False
@@ -185,22 +208,24 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
                 if start_county == target_county or target_county in ADJACENT_MAP.get(start_county, []):
                     is_adjacent = True
 
-            if not is_adjacent and stream.get("region") in ["south", "central", "east"] and ("台北" in start_loc or "新北" in start_loc):
-                transport_modes_used.add("高鐵轉乘 + 租車 (含15分手續)")
+            # 跨區交通判斷
+            if not is_adjacent and stream.get("region") in ["south", "central", "east"] and ("台北" in day_start_loc or "新北" in day_start_loc):
+                transport_modes_used.add(f"D{current_day_idx+1}:高鐵轉乘+租車")
                 hsr_station = stream.get("hsr", "台南高鐵站")
                 hsr_info = HSR_STATIONS.get(hsr_station, HSR_STATIONS["台南高鐵站"])
                 current_time += datetime.timedelta(minutes=hsr_info["hsr_time_from_tpe"] + CAR_RENTAL_BUFFER)
                 current_coords = {"lat": hsr_info["lat"], "lng": hsr_info["lng"], "name": hsr_station}
                 day_waypoints.append(current_coords)
             else:
-                transport_modes_used.add("全程直接自駕")
-                start_coords = HSR_STATIONS.get(start_loc, {"lat": stream["lat"], "lng": stream["lng"]}) 
-                current_coords = {"lat": start_coords["lat"], "lng": start_coords["lng"], "name": start_loc}
+                transport_modes_used.add(f"D{current_day_idx+1}:自駕前往")
+                start_coords = HSR_STATIONS.get(day_start_loc, {"lat": stream["lat"], "lng": stream["lng"]}) 
+                current_coords = {"lat": start_coords["lat"], "lng": start_coords["lng"], "name": day_start_loc}
                 day_waypoints.append(current_coords)
 
         travel_min = estimate_drive_time_minutes(current_coords["lat"], current_coords["lng"], stream["lat"], stream["lng"])
         
-        if current_day_idx == 0 and daily_count == 0 and "自駕" in list(transport_modes_used)[0]:
+        # 首站自駕強制緩衝
+        if daily_count == 0 and "自駕" in list(transport_modes_used)[-1]:
             travel_min = max(60, travel_min)
 
         is_long_drive = travel_min > 90
@@ -270,13 +295,23 @@ raw_ids = [s.strip() for s in stream_input_text.replace("\n", ",").split(",") if
 st.markdown("---")
 st.subheader("步驟二：任務條件與待勘溪流總表確認")
 
+num_days_est = math.ceil(len(raw_ids) / 3) if raw_ids else 1
+st.write("**📍 每日出發地點設定**")
+start_locations_list = []
+cols = st.columns(min(num_days_est, 4))
+for i in range(num_days_est):
+    with cols[i % 4]:
+        default_val = "台北高鐵站" if i == 0 else "當地住宿飯店"
+        loc = st.text_input(f"第 {i+1} 天出發地點", value=default_val, key=f"start_loc_{i}")
+        start_locations_list.append(loc)
+st.session_state["start_locations_list"] = start_locations_list
+
+st.write("**📅 任務時程與分組設定**")
 col_cond1, col_cond2, col_cond3, col_cond4 = st.columns(4)
-start_location = col_cond1.text_input("出發地點 (系統將依此判定交通模式)", value="台北高鐵站")
-start_date = col_cond2.date_input("現勘起始日期", value=datetime.date.today())
-start_time = col_cond3.time_input("每日首站出發時間", value=datetime.time(7, 30))
-col_g1, col_g2 = col_cond4.columns([1, 2])
-group_name = col_g1.selectbox("組別", ["A", "B", "C"])
-leader_info = col_g2.text_input("領隊電話", value="賴承農 0963")
+start_date = col_cond1.date_input("現勘起始日期", value=datetime.date.today())
+start_time = col_cond2.time_input("每日首站出發時間", value=datetime.time(7, 30))
+group_name = col_cond3.selectbox("組別", ["A", "B", "C"])
+leader_info = col_cond4.text_input("領隊電話", value="賴承農 0963")
 
 editor_data = []
 for sid in raw_ids:
@@ -311,7 +346,7 @@ for sid in raw_ids:
 
 df_editor_init = pd.DataFrame(editor_data)
 
-st.write("**📝 待勘溪流屬性微調** (已自動帶入 GeoJSON 行政區。若清空會合點，將自動復原預設地標)")
+st.write("**📝 待勘溪流屬性微調** (支援貼上 Google 地圖連結或座標；若清空會合點將自動復原預設地標)")
 edited_streams_df = st.data_editor(
     df_editor_init,
     column_config={
@@ -328,13 +363,27 @@ edited_streams_df = st.data_editor(
 )
 
 parsed_streams = []
+warning_messages = []
+
 for idx, row in edited_streams_df.iterrows():
     sid = row["溪流編號"]
     loc = row["會合地點"]
+    lat, lng, dms = row["lat"], row["lng"], row["dms"]
     
+    # 【防呆 1】若使用者將地點清空，自動自 GeoJSON 圖資庫帶回原始 Mark 點位
     if pd.isna(loc) or str(loc).strip() == "":
         geo_item = st.session_state.geojson_db.get(sid, {})
         loc = geo_item.get("mark", f"{sid}交會處")
+    
+    # 【防呆 2】判斷使用者是否修改了地標
+    old_loc = df_editor_init.loc[idx, "會合地點"]
+    if str(loc) != str(old_loc):
+        p_lat, p_lng, l_type = parse_custom_location(str(loc))
+        if l_type in ["url", "coord"]:
+            lat, lng = p_lat, p_lng
+            dms = "" # 取得新座標後可清除舊有 dms，由系統自動使用數值
+        elif l_type == "text":
+            warning_messages.append(f"⚠️ `{sid}`：您輸入了純文字地標「{loc}」。若系統無法精確比對座標，路徑規劃可能產生誤判，建議貼上 Google Maps 連結或經緯度。")
 
     if sid not in st.session_state.history_db:
         st.session_state.history_db[sid] = {}
@@ -342,7 +391,7 @@ for idx, row in edited_streams_df.iterrows():
     st.session_state.history_db[sid].update({
         "county": row["縣市"], "town": row["鄉鎮市區"], "village": row["村里"],
         "reason": row["回報原因"], "location": loc,
-        "lat": row["lat"], "lng": row["lng"], "dms": row["dms"],
+        "lat": lat, "lng": lng, "dms": dms,
         "region": row["region"], "hsr": row["hsr"]
     })
     
@@ -350,16 +399,20 @@ for idx, row in edited_streams_df.iterrows():
         "stream_id": sid,
         "county": row["縣市"], "town": row["鄉鎮市區"], "village": row["村里"],
         "reason": row["回報原因"], "location": loc,
-        "lat": row["lat"], "lng": row["lng"], "dms": row["dms"],
+        "lat": lat, "lng": lng, "dms": dms,
         "region": row["region"], "hsr": row["hsr"], "source": row["source"]
     })
+
+if warning_messages:
+    for msg in warning_messages:
+        st.warning(msg)
 
 # ==============================================================================
 # 6. 介面流程：步驟三 (開始排程與預覽)
 # ==============================================================================
 if st.button("🚀 確認無誤，開始智慧路徑排程", type="primary", use_container_width=True):
     schedule_data, daily_routes, transit_mode = run_schedule_simulation(
-        parsed_streams, start_location, start_date, start_time, group_name
+        parsed_streams, st.session_state["start_locations_list"], start_date, start_time, group_name
     )
     st.session_state["schedule_data"] = schedule_data
     st.session_state["daily_routes"] = daily_routes
@@ -370,13 +423,13 @@ if "schedule_data" in st.session_state:
     st.markdown("---")
     st.subheader("步驟三：現勘排程預覽與路徑匯出")
 
-    has_late = any(item.get("is_late") for item in st.session_state["schedule_data"])
-    has_long_drive = any(item.get("is_long_drive") for item in st.session_state["schedule_data"])
+    has_late = any(item.get("is_late") for item in st.session_state.get("schedule_data", []))
+    has_long_drive = any(item.get("is_long_drive") for item in st.session_state.get("schedule_data", []))
 
     if has_late:
-        st.warning("⚠️ **行程超時提醒**：黃色底色標註之現勘點，預計會合時間已超過下午 4:00。為考量山區現勘安全，建議減少單日點位數量或多安排一天行程。")
+        st.error("🚨 **超時防護警示**：黃底標註之現勘點預估會合時間已超過下午 4:00。為考量山區現勘安全，建議減少該日點位數量或多展延一天行程。")
     if has_long_drive:
-        st.warning("⚠️ **長途車程提醒**：部分相鄰點位車程預估超過 1.5 小時，系統已於會合時間欄位加註提示，請考量駕駛疲勞或調整現勘順序。")
+        st.warning("⚠️ **長途車程提醒**：部分相鄰點位車程預估大於 1.5 小時，系統已於會合時間加註提示，請評估駕駛疲勞或調整現勘順序。")
 
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     col_m1.metric("待勘總溪流", f"{len(st.session_state.get('schedule_data', []))} 條")
@@ -384,12 +437,12 @@ if "schedule_data" in st.session_state:
     col_m3.metric("系統判定交通模式", st.session_state.get("transit_mode", "判定中"))
     col_m4.metric("工作節奏設定", "每站停留 1.5h / 逢 15 分進位")
 
-    df_view = pd.DataFrame(st.session_state["schedule_data"])
+    df_view = pd.DataFrame(st.session_state.get("schedule_data", []))
     display_cols = ["自訂排序", "項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點", "is_late"]
     
     def highlight_schedule(row):
         if row.get('is_late'):
-            return ['background-color: #ffe066; color: #856404'] * len(row)
+            return ['background-color: #ffe066; color: #856404; font-weight: bold'] * len(row)
         return [''] * len(row)
         
     styled_df = df_view[display_cols].style.apply(highlight_schedule, axis=1)
@@ -417,7 +470,7 @@ if "schedule_data" in st.session_state:
             reordered_streams = [current_streams[i] for i in sorted_indices if i < len(current_streams)]
             
             new_schedule, new_routes, new_transit = run_schedule_simulation(
-                reordered_streams, start_location, start_date, start_time, group_name
+                reordered_streams, st.session_state.get("start_locations_list", []), start_date, start_time, group_name
             )
             st.session_state["schedule_data"] = new_schedule
             st.session_state["daily_routes"] = new_routes
@@ -455,7 +508,7 @@ if "schedule_data" in st.session_state:
     st.markdown("---")
     col_exp1, col_exp2 = st.columns(2)
     with col_exp1:
-        export_df = pd.DataFrame(st.session_state["schedule_data"])[
+        export_df = pd.DataFrame(st.session_state.get("schedule_data", []))[
             ["項次", "組別", "縣市", "鄉鎮市區", "村里", "編號", "回報原因", "會合時間", "會合地點"]
         ]
         excel_buffer = io.BytesIO()
@@ -483,16 +536,16 @@ if "schedule_data" in st.session_state:
                     "stmt": {
                         "sql": "INSERT INTO web_survey_plans (plan_id, start_location, start_date, start_time, group_name, leader_info, total_streams, total_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         "args": [
-                            {"type": "text", "value": plan_id}, {"type": "text", "value": start_location},
+                            {"type": "text", "value": plan_id}, {"type": "text", "value": st.session_state.get("start_locations_list", [""])[0]},
                             {"type": "text", "value": str(start_date)}, {"type": "text", "value": str(start_time)},
                             {"type": "text", "value": group_name}, {"type": "text", "value": leader_info},
-                            {"type": "integer", "value": str(len(st.session_state["schedule_data"]))},
-                            {"type": "integer", "value": str(len(st.session_state["daily_routes"]))}
+                            {"type": "integer", "value": str(len(st.session_state.get("schedule_data", [])))},
+                            {"type": "integer", "value": str(len(st.session_state.get("daily_routes", [])))}
                         ]
                     }
                 }]
                 
-                for item in st.session_state["schedule_data"]:
+                for item in st.session_state.get("schedule_data", []):
                     stmts.append({
                         "type": "execute",
                         "stmt": {
