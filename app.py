@@ -551,8 +551,8 @@ with tab1:
                         badge = get_risk_badge(r_name)
                         status_tag = f"<span style='color:#64748B; font-size:12px; margin-left:6px;'>（{status}）</span>"
                         
-                        # 第一筆標註為最新現況
-                        prefix = "🔸 <b>最新現況</b>：" if (idx == 0 and len(sorted_changes) > 1) else "🔹 "
+                        # 第一筆標註為最近一次調整
+                        prefix = "🔸 <b>最近一次調整</b>：" if (idx == 0 and len(sorted_changes) > 1) else "🔹 "
                         line_items.append(f"<div style='margin-bottom: 6px;'>{prefix}<b>[{y}年]</b> {badge} {status_tag}</div>")
 
                     st.markdown(f"""
