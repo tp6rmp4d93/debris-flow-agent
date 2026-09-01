@@ -312,7 +312,7 @@ if num_groups > 1:
     # 最後一組自動帶入剩餘數量
     last_grp = group_labels[num_groups - 1]
     group_counts[last_grp] = rem
-    g_cols[num_groups - 1].text_input(f"{last_group}組 分配數量 (自動計算)", value=str(rem), disabled=True)
+    g_cols[num_groups - 1].text_input(f"{last_grp}組 分配數量 (自動計算)", value=str(rem), disabled=True)
 else:
     group_counts["A"] = len(raw_ids)
 
