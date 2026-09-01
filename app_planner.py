@@ -70,7 +70,6 @@ def load_all_stream_data():
     geojson_db = {}
     history_db = {}
     
-    # 1. 載入官方 GeoJSON
     try:
         with open("debrisstream1753_20260113_wgs84.geojson", "r", encoding="utf-8") as f:
             gj = json.load(f)
@@ -99,7 +98,6 @@ def load_all_stream_data():
     except Exception as e:
         st.warning(f"尚未載入 GeoJSON 基礎圖資：{e}")
 
-    # 2. 載入歷年實地會合點資料庫
     try:
         with open("stream_database.json", "r", encoding="utf-8") as f:
             history_db = json.load(f)
@@ -206,7 +204,9 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
         if current_day_idx == 0 and daily_count == 0 and "自駕" in list(transport_modes_used)[0]:
             travel_min = max(60, travel_min)
 
-        # 加入車程並套用「逢 15 分鐘進位」邏輯
+        # 檢測是否長途車程 (> 1.5小時)
+        is_long_drive = travel_min > 90
+
         arrival_time = current_time + datetime.timedelta(minutes=travel_min)
         arrival_time = round_time_to_15_mins(arrival_time)
 
@@ -215,11 +215,17 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
             had_lunch_today = True
 
         leave_time = arrival_time + datetime.timedelta(minutes=SURVEY_DURATION)
+        
+        # 檢測是否超過下午 4 點 (16:00)
+        is_late = arrival_time.time() > datetime.time(16, 0)
 
         tw_year = arrival_time.year - 1911
         ampm = "AM" if arrival_time.hour < 12 else "PM"
         formatted_time = f"{tw_year}/{arrival_time.strftime('%m/%d')}\n{ampm}{arrival_time.strftime('%H:%M')}"
         
+        if is_long_drive:
+            formatted_time += "\n(⚠️車程>1.5h)"
+            
         loc_dms = f"\n({stream.get('dms')})" if stream.get('dms') else ""
         formatted_loc = f"{stream['location']}{loc_dms}"
 
@@ -231,7 +237,7 @@ def run_schedule_simulation(stream_list, start_loc, start_date, start_time, grou
             "會合地點": formatted_loc, "lat": stream["lat"], "lng": stream["lng"],
             "raw_time": arrival_time, "day_no": current_day_idx + 1,
             "location_name": stream["location"], "coords_dms": stream.get("dms", ""),
-            "source": stream.get("source", "MANUAL")
+            "source": stream.get("source", "MANUAL"), "is_late": is_late, "is_long_drive": is_long_drive
         })
 
         current_coords = {"lat": stream["lat"], "lng": stream["lng"], "name": stream["location"]}
@@ -308,7 +314,7 @@ for sid in raw_ids:
 
 df_editor_init = pd.DataFrame(editor_data)
 
-st.write("**📝 待勘溪流屬性微調** (已自動帶入 GeoJSON 行政區，支援直接修改回報原因與地點)")
+st.write("**📝 待勘溪流屬性微調** (已自動帶入 GeoJSON 行政區。若清空會合點，將自動復原預設地標)")
 edited_streams_df = st.data_editor(
     df_editor_init,
     column_config={
@@ -326,10 +332,28 @@ edited_streams_df = st.data_editor(
 
 parsed_streams = []
 for idx, row in edited_streams_df.iterrows():
-    parsed_streams.append({
-        "stream_id": row["溪流編號"],
+    sid = row["溪流編號"]
+    loc = row["會合地點"]
+    
+    # 【防呆機制】若使用者將地點清空，自動自圖資庫帶回原始 Mark 點位
+    if pd.isna(loc) or str(loc).strip() == "":
+        geo_item = st.session_state.geojson_db.get(sid, {})
+        loc = geo_item.get("mark", f"{sid}交會處")
+
+    if sid not in st.session_state.stream_db:
+        st.session_state.stream_db[sid] = {}
+        
+    st.session_state.stream_db[sid].update({
         "county": row["縣市"], "town": row["鄉鎮市區"], "village": row["村里"],
-        "reason": row["回報原因"], "location": row["會合地點"],
+        "reason": row["回報原因"], "location": loc,
+        "lat": row["lat"], "lng": row["lng"], "dms": row["dms"],
+        "region": row["region"], "hsr": row["hsr"]
+    })
+    
+    parsed_streams.append({
+        "stream_id": sid,
+        "county": row["縣市"], "town": row["鄉鎮市區"], "village": row["村里"],
+        "reason": row["回報原因"], "location": loc,
         "lat": row["lat"], "lng": row["lng"], "dms": row["dms"],
         "region": row["region"], "hsr": row["hsr"], "source": row["source"]
     })
@@ -350,6 +374,15 @@ if "schedule_data" in st.session_state:
     st.markdown("---")
     st.subheader("步驟三：現勘排程預覽與路徑匯出")
 
+    # 檢測並顯示視覺警示
+    has_late = any(item.get("is_late") for item in st.session_state["schedule_data"])
+    has_long_drive = any(item.get("is_long_drive") for item in st.session_state["schedule_data"])
+
+    if has_late:
+        st.warning("⚠️ **行程超時提醒**：黃色底色標註之現勘點，預計會合時間已超過下午 4:00。為考量山區現勘安全，建議減少單日點位數量或多安排一天行程。")
+    if has_long_drive:
+        st.warning("⚠️ **長途車程提醒**：部分相鄰點位車程預估超過 1.5 小時，系統已於會合時間欄位加註提示，請考量駕駛疲勞或調整現勘順序。")
+
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     col_m1.metric("待勘總溪流", f"{len(st.session_state.get('schedule_data', []))} 條")
     col_m2.metric("規劃總天數", f"{len(st.session_state.get('daily_routes', []))} 天")
@@ -357,16 +390,27 @@ if "schedule_data" in st.session_state:
     col_m4.metric("工作節奏設定", "每站停留 1.5h / 逢 15 分進位")
 
     df_view = pd.DataFrame(st.session_state["schedule_data"])
-    display_cols = ["自訂排序", "項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點"]
+    display_cols = ["自訂排序", "項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點", "is_late"]
+    
+    # 套用 Pandas Styler 黃色高亮超時的點位
+    def highlight_schedule(row):
+        if row.get('is_late'):
+            return ['background-color: #ffe066; color: #856404'] * len(row)
+        return [''] * len(row)
+        
+    styled_df = df_view[display_cols].style.apply(highlight_schedule, axis=1)
+
+    st.info("💡 **自訂路線微調**：若欲更改現勘順序，請直接修改下方「自訂排序」數字，並點擊右側「套用排序重算」。")
     
     col_v1, col_v2 = st.columns([5, 1])
     with col_v1:
         edited_sort_df = st.data_editor(
-            df_view[display_cols],
+            styled_df,
             column_config={
                 "自訂排序": st.column_config.NumberColumn(min_value=1, max_value=99, step=1, required=True),
                 "會合時間": st.column_config.TextColumn(width="medium"),
                 "會合地點": st.column_config.TextColumn(width="large"),
+                "is_late": None  # 在介面上隱藏布林值判定欄
             },
             disabled=["項次", "組別", "縣市", "鄉鎮市區", "編號", "會合時間", "會合地點"],
             use_container_width=True,
