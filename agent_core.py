@@ -54,24 +54,24 @@ class DebrisRainfallAgentCore:
         if records:
             df_full = pd.concat(records, ignore_index=True)
             
-            # 強健的欄位名稱自動對應 (支援 WRA 英文與中文原欄位)
+            # 強健的欄位名稱動態對應 (支援水利署各種匯出欄位格式)
             rename_mapping = {}
             for c in df_full.columns.tolist():
-                c_str = str(c).strip()
-                if c_str in ['StNo', '測站編號', '測站代號', 'stno']: rename_mapping[c] = '測站代號'
-                elif c_str in ['StName', '站名', '測站名稱', 'stname']: rename_mapping[c] = '測站名稱'
-                elif c_str in ['AdmiName', '縣市名稱', '縣市', 'adminame']: rename_mapping[c] = '縣市'
-                elif c_str in ['Rain', '雨量', '累積雨量(mm)', '累積雨量_mm', 'rain']: rename_mapping[c] = '累積雨量_mm'
-                elif c_str in ['EventNo', '事件編號', '事件代碼', 'eventno']: rename_mapping[c] = '事件代碼'
-                elif c_str in ['EventName', '災害名稱', '事件名稱', 'eventname']: rename_mapping[c] = '事件名稱'
-                elif c_str in ['BTime', '開始時間', '降雨起時間', 'btime']: rename_mapping[c] = '降雨起時間'
-                elif c_str in ['ETime', '結束時間', '降雨訖時間', 'etime']: rename_mapping[c] = '降雨訖時間'
-                elif c_str in ['Duration', '時段', '統計時長', 'duration']: rename_mapping[c] = '統計時長'
+                c_str = str(c).strip().lower()
+                if c_str in ['stno', '測站編號', '測站代號', 'stationno']: rename_mapping[c] = '測站代號'
+                elif c_str in ['stname', '站名', '測站名稱', 'stationname']: rename_mapping[c] = '測站名稱'
+                elif c_str in ['adminame', '縣市名稱', '縣市', 'county']: rename_mapping[c] = '縣市'
+                elif c_str in ['rain', '雨量', '累積雨量(mm)', '累積雨量_mm', 'totalrain']: rename_mapping[c] = '累積雨量_mm'
+                elif c_str in ['eventno', '事件編號', '事件代碼']: rename_mapping[c] = '事件代碼'
+                elif c_str in ['eventname', '災害名稱', '事件名稱']: rename_mapping[c] = '事件名稱'
+                elif c_str in ['btime', '開始時間', '降雨起時間']: rename_mapping[c] = '降雨起時間'
+                elif c_str in ['etime', '結束時間', '降雨訖時間']: rename_mapping[c] = '降雨訖時間'
+                elif c_str in ['duration', '時段', '統計時長']: rename_mapping[c] = '統計時長'
 
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
 
-            # 防禦性檢查：確保所有必要欄位絕對存在，避免 KeyError
+            # 防禦性檢查：若欄位真的缺漏，自動補上預設欄位以徹底防止 KeyError
             required_cols = ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長', '來源檔案']
             for req_col in required_cols:
                 if req_col not in df_full.columns:
@@ -235,7 +235,7 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = "無提供"
                 event_info = {'name': f"{ev_name} ({ev_code})", 'source': src_lvl, 'vals': ev_vals}
 
-        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n"
+        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
         response_text += f"- **地理位置**：{county}{town}{vill}\n"
         response_text += f"- **警戒基準值**：`{alert_val} mm`\n"
