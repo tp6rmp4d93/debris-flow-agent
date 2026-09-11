@@ -243,6 +243,7 @@ class DebrisRainfallAgentCore:
 
         response_text += f"📊 **【歷史最大降雨紀錄】**\n"
         for d in self.durations:
+            # 確保每個項目之間加上換行符號
             response_text += f"• {d}：{hist_max[d]}\n"
 
         if event_info:
