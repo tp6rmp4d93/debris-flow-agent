@@ -18,19 +18,56 @@ class DebrisRainfallAgentCore:
     def _load_database(self):
         records = []
         if not os.path.exists(self.excel_dir):
-            return pd.DataFrame()
+            # 嘗試尋找替代路徑
+            alt_path = "水利署歷史事件雨量資料庫/事件明細Excel"
+            if os.path.exists(alt_path):
+                self.excel_dir = alt_path
+            else:
+                return pd.DataFrame()
+
         for f in os.listdir(self.excel_dir):
             if f.endswith('.xlsx'):
                 try:
-                    xls = pd.ExcelFile(os.path.join(self.excel_dir, f))
-                    if "全時段合併表" in xls.sheet_names:
-                        records.append(pd.read_excel(xls, sheet_name="全時段合併表"))
-                except:
+                    file_path = os.path.join(self.excel_dir, f)
+                    xls = pd.ExcelFile(file_path)
+                    target_sheet = "全時段合併表" if "全時段合併表" in xls.sheet_names else xls.sheet_names[0]
+                    df = pd.read_excel(xls, sheet_name=target_sheet)
+                    records.append(df)
+                except Exception:
                     pass
+
         if records:
-            df = pd.concat(records, ignore_index=True)
-            df['測站代號'] = df['測站代號'].astype(str).str.strip()
-            df['測站名稱'] = df['測站名稱'].astype(str).str.strip()
+            df_full = pd.concat(records, ignore_index=True)
+            
+            # -------------------------------------------------------------
+            # 欄位名稱自動對應與容錯轉換 (解決 KeyError)
+            # -------------------------------------------------------------
+            rename_mapping = {}
+            cols = df_full.columns.tolist()
+            
+            if 'StNo' in cols and '測站代號' not in cols: rename_mapping['StNo'] = '測站代號'
+            if 'StName' in cols and '測站名稱' not in cols: rename_mapping['StName'] = '測站名稱'
+            if 'AdmiName' in cols and '縣市' not in cols: rename_mapping['AdmiName'] = '縣市'
+            if 'Rain' in cols and '累積雨量_mm' not in cols: rename_mapping['Rain'] = '累積雨量_mm'
+            if 'EventNo' in cols and '事件代碼' not in cols: rename_mapping['EventNo'] = '事件代碼'
+            if 'EventName' in cols and '事件名稱' not in cols: rename_mapping['EventName'] = '事件名稱'
+            if 'BTime' in cols and '降雨起時間' not in cols: rename_mapping['BTime'] = '降雨起時間'
+            if 'ETime' in cols and '降雨訖時間' not in cols: rename_mapping['ETime'] = '降雨訖時間'
+            if 'Duration' in cols and '統計時長' not in cols: rename_mapping['Duration'] = '統計時長'
+
+            if rename_mapping:
+                df_full = df_full.rename(columns=rename_mapping)
+
+            # 確保必要欄位存在，若無則補空欄位避免崩潰
+            for req_col in ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長']:
+                if req_col not in df_full.columns:
+                    df_full[req_col] = "-"
+
+            df_full['測站代號'] = df_full['測站代號'].astype(str).str.strip()
+            df_full['測站名稱'] = df_full['測站名稱'].astype(str).str.strip()
+            df_full['縣市'] = df_full['縣市'].astype(str).str.strip()
+            
+            # 正規化「統計時長」
             def norm_duration(d_str):
                 d_str = str(d_str).strip()
                 if "總累計" in d_str or "事件總" in d_str or d_str == "0":
@@ -39,8 +76,9 @@ class DebrisRainfallAgentCore:
                     if f"{h}小時" in d_str or f"{h}h" in d_str.lower():
                         return f"連續{h}小時"
                 return d_str
-            df['統計時長'] = df['統計時長'].apply(norm_duration)
-            return df
+            df_full['統計時長'] = df_full['統計時長'].apply(norm_duration)
+            return df_full
+            
         return pd.DataFrame()
 
     def _get_station_aliases(self, station_id):
@@ -65,7 +103,6 @@ class DebrisRainfallAgentCore:
                             return matched, sname, sid
             return pd.DataFrame(), None, None
 
-        # 同村里 -> 同鄉鎮 -> 同縣市
         for streams, lvl in [
             (self.df_debris[(self.df_debris['County']==county) & (self.df_debris['Town']==town) & (self.df_debris['Vill']==vill)], f"同村里 ({town}{vill})"),
             (self.df_debris[(self.df_debris['County']==county) & (self.df_debris['Town']==town)], f"同鄉鎮 ({town})"),
@@ -86,7 +123,6 @@ class DebrisRainfallAgentCore:
         st1_id, st1_name = stream['STID1'], stream['STName1']
         st2_id, st2_name = stream.get('STID2'), stream.get('STName2')
 
-        # 尋找歷史最大雨量測站
         st1_cand = self._get_station_aliases(st1_id)
         df_sub = self.all_rain_records[(self.all_rain_records['測站代號'].isin(st1_cand)) | ((self.all_rain_records['測站名稱'] == st1_name) & (self.all_rain_records['縣市'] == county))].copy()
         active_name, active_id = st1_name, st1_id
@@ -99,7 +135,6 @@ class DebrisRainfallAgentCore:
         if df_sub.empty:
             return f"❌ 參考雨量站 [{active_name}] 於歷史雨量庫中查無紀錄。"
 
-        # 計算歷史最大
         hist_max = {}
         for d in self.durations:
             df_d = df_sub[df_sub['統計時長'] == d]
@@ -109,7 +144,6 @@ class DebrisRainfallAgentCore:
             else:
                 hist_max[d] = "-"
 
-        # 若指定特定事件
         event_info = None
         if event_keyword:
             clean_kw = re.sub(r'(颱風|豪雨|大雨|\(\d{4}\)|\d{4}_?)', '', event_keyword).strip()
@@ -122,7 +156,6 @@ class DebrisRainfallAgentCore:
                 ev_name = df_ev_all.iloc[0]['事件名稱']
                 ev_code = df_ev_all.iloc[0]['事件代碼']
                 
-                # 檢查原測站是否有此事件，無則回退
                 df_ev_matched = df_ev_all[(df_ev_all['測站代號'].isin(st1_cand)) | ((df_ev_all['測站名稱'] == st1_name) & (df_ev_all['縣市'] == county))]
                 src_lvl = "原參考站"
                 if df_ev_matched.empty:
@@ -139,7 +172,6 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = "無提供"
                 event_info = {'name': f"{ev_name} ({ev_code})", 'source': src_lvl, 'vals': ev_vals}
 
-        # 組合結構化文字或 Markdown 回應
         response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
         response_text += f"- **地理位置**：{county}{town}{vill}\n"
