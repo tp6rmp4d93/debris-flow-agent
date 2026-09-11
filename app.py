@@ -412,9 +412,10 @@ with tab1:
                 st.markdown("**🌧️ 水利署歷史極端雨量統計**：")
                 try:
                     rain_md = rain_agent.execute_query(sid)
+                    formatted_rain = rain_md.replace('\n', '<br>')
                     st.markdown(f"""
                     <div style="background-color:#F0FDF4; border:1px solid #BBF7D0; padding:12px 14px; border-radius:8px; font-size:13px; line-height:1.6;">
-                    {rain_md.replace('\n', '<br>')}
+                    {formatted_rain}
                     </div>
                     """, unsafe_allow_html=True)
                 except Exception as e:
