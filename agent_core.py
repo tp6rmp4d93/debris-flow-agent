@@ -236,7 +236,7 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = f"{top_sub['累積雨量_mm']} mm"
                         else:
                             ev_vals[d] = "無提供"
-                event_info = {'name': f"{ev_name} ({ev_code})", 'source': src_lvl, 'vals': ev_vals}
+                event_info = {'name': f"{ev_name} ", 'source': src_lvl, 'vals': ev_vals}
 
         response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
