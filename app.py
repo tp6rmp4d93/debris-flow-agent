@@ -413,13 +413,9 @@ with tab1:
                 try:
                     rain_md = rain_agent.execute_query(sid)
                     
-                    # 使用原生的 st.container 搭配淡綠色外框，讓 Markdown 完美解析
-                    with st.container():
-                        st.markdown(f"""
-                        <div style="background-color:#F0FDF4; border:1px solid #BBF7D0; padding:14px; border-radius:8px;">
-                        {rain_md}
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # 透過 Streamlit 原生 container 呈現，外觀乾淨且 100% 完美解析 Markdown
+                    with st.container(border=True):
+                        st.markdown(rain_md)
                 except Exception as e:
                     st.caption(f"*(目前無對應的雨量站數據: {e})*")
 
