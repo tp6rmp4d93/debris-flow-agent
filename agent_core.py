@@ -18,7 +18,6 @@ class DebrisRainfallAgentCore:
     def _load_database(self):
         records = []
         if not os.path.exists(self.excel_dir):
-            # 嘗試尋找替代路徑
             alt_path = "水利署歷史事件雨量資料庫/事件明細Excel"
             if os.path.exists(alt_path):
                 self.excel_dir = alt_path
@@ -40,25 +39,27 @@ class DebrisRainfallAgentCore:
             df_full = pd.concat(records, ignore_index=True)
             
             # -------------------------------------------------------------
-            # 欄位名稱自動對應與容錯轉換 (解決 KeyError)
+            # 強健的欄位名稱自動對應與容錯 (防範 KeyError)
             # -------------------------------------------------------------
             rename_mapping = {}
             cols = df_full.columns.tolist()
             
-            if 'StNo' in cols and '測站代號' not in cols: rename_mapping['StNo'] = '測站代號'
-            if 'StName' in cols and '測站名稱' not in cols: rename_mapping['StName'] = '測站名稱'
-            if 'AdmiName' in cols and '縣市' not in cols: rename_mapping['AdmiName'] = '縣市'
-            if 'Rain' in cols and '累積雨量_mm' not in cols: rename_mapping['Rain'] = '累積雨量_mm'
-            if 'EventNo' in cols and '事件代碼' not in cols: rename_mapping['EventNo'] = '事件代碼'
-            if 'EventName' in cols and '事件名稱' not in cols: rename_mapping['EventName'] = '事件名稱'
-            if 'BTime' in cols and '降雨起時間' not in cols: rename_mapping['BTime'] = '降雨起時間'
-            if 'ETime' in cols and '降雨訖時間' not in cols: rename_mapping['ETime'] = '降雨訖時間'
-            if 'Duration' in cols and '統計時長' not in cols: rename_mapping['Duration'] = '統計時長'
+            for c in cols:
+                c_str = str(c).strip()
+                if c_str in ['StNo', '測站編號']: rename_mapping[c] = '測站代號'
+                elif c_str in ['StName', '站名']: rename_mapping[c] = '測站名稱'
+                elif c_str in ['AdmiName', '縣市名稱']: rename_mapping[c] = '縣市'
+                elif c_str in ['Rain', '雨量', '累積雨量(mm)']: rename_mapping[c] = '累積雨量_mm'
+                elif c_str in ['EventNo', '事件編號']: rename_mapping[c] = '事件代碼'
+                elif c_str in ['EventName', '災害名稱']: rename_mapping[c] = '事件名稱'
+                elif c_str in ['BTime', '開始時間']: rename_mapping[c] = '降雨起時間'
+                elif c_str in ['ETime', '結束時間']: rename_mapping[c] = '降雨訖時間'
+                elif c_str in ['Duration', '時段']: rename_mapping[c] = '統計時長'
 
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
 
-            # 確保必要欄位存在，若無則補空欄位避免崩潰
+            # 補齊必要欄位
             for req_col in ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長']:
                 if req_col not in df_full.columns:
                     df_full[req_col] = "-"
@@ -66,6 +67,7 @@ class DebrisRainfallAgentCore:
             df_full['測站代號'] = df_full['測站代號'].astype(str).str.strip()
             df_full['測站名稱'] = df_full['測站名稱'].astype(str).str.strip()
             df_full['縣市'] = df_full['縣市'].astype(str).str.strip()
+            df_full['累積雨量_mm'] = pd.to_numeric(df_full['累積雨量_mm'], errors='coerce').fillna(0.0)
             
             # 正規化「統計時長」
             def norm_duration(d_str):
@@ -95,7 +97,7 @@ class DebrisRainfallAgentCore:
     def _find_event_fallback(self, event_df_all, county, town, vill):
         def check_streams(sub_streams):
             for _, r in sub_streams.iterrows():
-                for sid, sname in [(r['STID1'], r['STName1']), (r.get('STID2'), r.get('STName2'))]:
+                for sid, sname in [(r['STID1'], r['STName1']), (r.get('STID2'], r.get('STName2'))]:
                     if sid and sname:
                         cand = self._get_station_aliases(sid)
                         matched = event_df_all[(event_df_all['測站代號'].isin(cand)) | ((event_df_all['測站名稱'] == sname) & (event_df_all['縣市'] == county))]
@@ -114,9 +116,12 @@ class DebrisRainfallAgentCore:
         return pd.DataFrame(), None, None, None
 
     def execute_query(self, debris_no, event_keyword=None):
+        if self.all_rain_records.empty:
+            return "❌ 歷史雨量資料庫尚未載入或無資料。"
+
         stream_info = self.df_debris[self.df_debris['DebrisNO'] == debris_no]
         if stream_info.empty:
-            return f"❌ 查無土石流潛勢溪流編號：{debris_no}，請確認代碼是否正確（例如：屏縣DF021）。"
+            return f"❌ 查無土石流潛勢溪流編號：{debris_no}。"
 
         stream = stream_info.iloc[0]
         county, town, vill = stream['County'], stream['Town'], stream['Vill']
