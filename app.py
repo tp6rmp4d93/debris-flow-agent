@@ -355,7 +355,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =============================================================
-# TAB 1: 調查資料
+# TAB 1: 調查資料 (完整保留原有沿革與災情，並擴充內嵌雨量資訊)
 # =============================================================
 with tab1:
     if not has_filter:
@@ -368,8 +368,11 @@ with tab1:
             cty, twn = info["county"], info["township"]
             v_str = "、".join(sorted(info["villages"])) if info["villages"] else "未載明村里"
             with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}） ｜ 歷年報告：{info['report_count']} 份", expanded=(len(grouped_streams) == 1)):
+                # 1. 劃設調整沿革
                 st.markdown(f"**📐 劃設調整沿革**：\n\n{info['adjustments']}")
                 st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
+                
+                # 2. 歷年風險等級異動歷程
                 st.markdown("**📊 歷年風險評估等級異動歷程**：")
                 if info["risk_history"]:
                     sorted_asc = sorted(info["risk_history"], key=lambda x: x.get("year", 0))
@@ -394,14 +397,28 @@ with tab1:
                 else:
                     st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無公告風險等級紀錄</span>", unsafe_allow_html=True)
 
+                # 3. 歷年重大災害情勢
                 if info["disasters"]:
-                    st.markdown("**🕒 歷年重大災害情勢**：")
+                    st.markdown("<br>**🕒 歷年重大災害情勢**：", unsafe_allow_html=True)
                     for d in info["disasters"]:
                         yr = d.get("year", "歷史災害")
                         rf = d.get("rainfall_info", "")
                         dmg = d.get("scale_and_damage") or d.get("description", "無詳細說明")
                         rf_badge = f"<span style='color:#2563EB;font-size:12px;margin-left:8px;'>🌧️ 雨量：{rf}</span>" if (rf and rf != "未載明") else ""
                         st.markdown(f'<div class="disaster-badge"><b>🚨 {yr}</b>{rf_badge}<br><span style="color:#334155;">{dmg}</span></div>', unsafe_allow_html=True)
+
+                # 4. 【新增】將歷史雨量資訊直接內嵌至查詢結果中
+                st.markdown("<hr style='margin:12px 0; border:0; border-top:1px solid #CBD5E1;'>", unsafe_allow_html=True)
+                st.markdown("**🌧️ 水利署歷史極端雨量統計**：")
+                try:
+                    rain_md = rain_agent.execute_query(sid)
+                    st.markdown(f"""
+                    <div style="background-color:#F0FDF4; border:1px solid #BBF7D0; padding:12px 14px; border-radius:8px; font-size:13px; line-height:1.6;">
+                    {rain_md.replace('\n', '<br>')}
+                    </div>
+                    """, unsafe_allow_html=True)
+                except Exception as e:
+                    st.caption(f"*(目前無對應的雨量站數據: {e})*")
 
 # =============================================================
 # TAB 2: 調查報告 (歷年 PDF)
