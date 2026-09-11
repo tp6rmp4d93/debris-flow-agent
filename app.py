@@ -409,15 +409,17 @@ with tab1:
 
                 # 4. 【新增】將歷史雨量資訊直接內嵌至查詢結果中
                 st.markdown("<hr style='margin:12px 0; border:0; border-top:1px solid #CBD5E1;'>", unsafe_allow_html=True)
-                st.markdown("**🌧️ 水利署歷史極端雨量統計**：")
+                st.markdown("**🌧️ 水利署歷史極端雨量與空間回退統計**：")
                 try:
                     rain_md = rain_agent.execute_query(sid)
-                    formatted_rain = rain_md.replace('\n', '<br>')
-                    st.markdown(f"""
-                    <div style="background-color:#F0FDF4; border:1px solid #BBF7D0; padding:12px 14px; border-radius:8px; font-size:13px; line-height:1.6;">
-                    {formatted_rain}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    
+                    # 使用原生的 st.container 搭配淡綠色外框，讓 Markdown 完美解析
+                    with st.container():
+                        st.markdown(f"""
+                        <div style="background-color:#F0FDF4; border:1px solid #BBF7D0; padding:14px; border-radius:8px;">
+                        {rain_md}
+                        </div>
+                        """, unsafe_allow_html=True)
                 except Exception as e:
                     st.caption(f"*(目前無對應的雨量站數據: {e})*")
 
