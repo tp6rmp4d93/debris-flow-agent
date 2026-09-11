@@ -39,22 +39,24 @@ class DebrisRainfallAgentCore:
         if not os.path.exists(self.excel_dir):
             return pd.DataFrame()
 
-        for f in os.listdir(self.excel_dir):
-            if f.endswith('.xlsx'):
-                try:
-                    file_path = os.path.join(self.excel_dir, f)
-                    xls = pd.ExcelFile(file_path)
-                    target_sheet = "全時段合併表" if "全時段合併表" in xls.sheet_names else xls.sheet_names[0]
-                    df = pd.read_excel(xls, sheet_name=target_sheet)
-                    df['來源檔案'] = f
-                    records.append(df)
-                except Exception:
-                    pass
+        # 動態掃描資料夾內所有 Excel (自動涵蓋後續新增的事件檔案)
+        files = [f for f in os.listdir(self.excel_dir) if f.endswith('.xlsx')]
+        
+        for f in files:
+            try:
+                file_path = os.path.join(self.excel_dir, f)
+                xls = pd.ExcelFile(file_path)
+                target_sheet = "全時段合併表" if "全時段合併表" in xls.sheet_names else xls.sheet_names[0]
+                df = pd.read_excel(xls, sheet_name=target_sheet)
+                df['來源檔案'] = f
+                records.append(df)
+            except Exception:
+                pass
 
         if records:
             df_full = pd.concat(records, ignore_index=True)
             
-            # 強健的欄位名稱動態對應 (支援水利署各種匯出欄位格式)
+            # 強健的欄位名稱動態對應
             rename_mapping = {}
             for c in df_full.columns.tolist():
                 c_str = str(c).strip().lower()
@@ -71,7 +73,6 @@ class DebrisRainfallAgentCore:
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
 
-            # 防禦性檢查：若欄位真的缺漏，自動補上預設欄位以徹底防止 KeyError
             required_cols = ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長', '來源檔案']
             for req_col in required_cols:
                 if req_col not in df_full.columns:
@@ -91,6 +92,8 @@ class DebrisRainfallAgentCore:
                         return f"連續{h}小時"
                 return d_str
             df_full['統計時長'] = df_full['統計時長'].apply(norm_duration)
+            
+            print(f"📥 [系統通知] 已動態載入歷史雨量庫，目前共納入 {len(files)} 場事件檔案進行比對。")
             return df_full
             
         return pd.DataFrame()
