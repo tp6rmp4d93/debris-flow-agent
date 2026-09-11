@@ -238,11 +238,11 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = "無提供"
                 event_info = {'name': f"{ev_name} ({ev_code})", 'source': src_lvl, 'vals': ev_vals}
 
-        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n\n"
+        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
         response_text += f"- **地理位置**：{county}{town}{vill}\n"
         response_text += f"- **警戒基準值**：`{alert_val} mm`\n"
-        response_text += f"- **參考雨量站**：{active_name} ({active_id})\n\n"
+        response_text += f"- **參考雨量站**：{active_name} ({active_id})\n"
 
         response_text += f"📊 **【歷史最大降雨紀錄】**\n"
         for d in self.durations:
