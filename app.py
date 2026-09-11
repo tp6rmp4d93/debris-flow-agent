@@ -260,7 +260,7 @@ def generate_ai_summary(stream_data_json_str: str) -> str:
 # 6. 主頁面與頂部條件篩選
 # -------------------------------------------------------------
 st.markdown('<div class="main-title">⛰️ 土石流潛勢溪流調查與雨量決策平台</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">歷史報告檢索 ｜ 劃設沿革與災情 ｜ 歷年風險等級 ｜ 🌧️ 歷年極端雨量分析 ｜ AI 決策綜整</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">歷史報告｜劃設沿革｜歷年風險等級｜🌧️ 歷年雨量分析｜AI 決策綜整</div>', unsafe_allow_html=True)
 
 df_turso = load_all_streams_data()
 if df_turso.empty:
@@ -429,33 +429,44 @@ with tab2:
             st.markdown("<hr style='margin:8px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
 # =============================================================
-# TAB 3: 歷史雨量分析 (新整併功能)
+# TAB 3: 歷史雨量分析 (智慧聯想帶入篩選溪流)
 # =============================================================
 with tab3:
     st.markdown("#### 🌧️ 土石流潛勢溪流歷年極端降雨與事件雨量智慧檢索")
-    st.markdown("輸入潛勢溪流編號（如 `屏縣DF021`），可選填指定歷史事件（如 `莫拉克` 或 `山陀兒`），系統將自動對應水利署雨量資料庫與空間回退參考站[cite: 3, 4, 5]。")
+    st.markdown("系統會**自動依上方設定的縣市、鄉鎮或關鍵字篩選條件**帶入對應的潛勢溪流清單。只需直接選擇溪流並選填歷史事件即可快速檢索[cite: 3, 4]。")
     
-    r_col1, r_col2 = st.columns([2, 1])
+    # 自動抓取當前篩選條件下的溪流編號清單（若未篩選則預設全台清單）
+    if grouped_streams:
+        available_streams = sorted(list(grouped_streams.keys()))
+        selection_hint = f"（已自動依上方篩選條件鎖定 {len(available_streams)} 條溪流）"
+    else:
+        available_streams = sorted(rain_agent.df_debris['DebrisNO'].dropna().unique().tolist())
+        selection_hint = "（目前為全台潛勢溪流清單，建議可透過上方篩選縮小範圍）"
+
+    st.caption(f"📌 可選溪流範圍 {selection_hint}")
+
+    r_col1, r_col2, r_col3 = st.columns([2, 1, 1])
     with r_col1:
-        rain_query_input = st.text_input("輸入查詢指令（格式：`溪流編號` 或 `溪流編號 事件關鍵字`）", placeholder="屏縣DF021 莫拉克", key="rain_input_box")
+        # 自動帶入目前篩選出的第一條溪流作為預設值
+        selected_stream = st.selectbox("選擇潛勢溪流編號", available_streams, key="rain_stream_select")
     with r_col2:
+        event_keyword_input = st.text_input("選填歷史事件關鍵字", placeholder="例如: 莫拉克、山陀兒、T2418", key="rain_event_input")
+    with r_col3:
         st.markdown("<br>", unsafe_allow_html=True)
         rain_submit = st.button("🔍 執行雨量檢索", type="primary", key="rain_btn")
 
-    if rain_submit and rain_query_input:
-        with st.spinner("正在對應雨量站與水利署歷史雨量資料庫中..."):
-            # 調用 agent_core 的邏輯取得結果 DataFrame
-            parts = rain_query_input.strip().split()
-            d_no = parts[0]
-            e_kw = parts[1] if len(parts) > 1 else None
+    # 當使用者點擊檢索或切換時自動帶入執行
+    if rain_submit and selected_stream:
+        with st.spinner(f"正在對應 `{selected_stream}` 之參考雨量站與水利署歷史雨量資料庫中..."):
+            e_kw = event_keyword_input.strip() if event_keyword_input else None
             
-            # 執行查詢
-            df_rain_result = rain_agent.execute_query(d_no, e_kw)
+            # 執行雨量與空間回退查詢
+            df_rain_result = rain_agent.execute_query(selected_stream, e_kw)
             
             if isinstance(df_rain_result, str):
                 st.error(df_rain_result)
             else:
-                st.markdown(f"### 📍 查詢結果：`{d_no}`")
+                st.markdown(f"### 📍 查詢結果：`{selected_stream}`")
                 st.dataframe(df_rain_result, use_container_width=True, hide_index=True)
 
 # =============================================================
