@@ -1,13 +1,13 @@
 import os
 import re
 import json
+from datetime import datetime, timedelta
 import pandas as pd
 
 class DebrisRainfallAgentCore:
     def __init__(self, db_dir="wra_rain_db/excel_data", debris_json="GetDebrisRainData.json"):
         script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
         
-        # 智慧尋找正確的 excel 資料夾路徑
         candidate_paths = [
             db_dir,
             os.path.join(script_dir, "wra_rain_db", "excel_data"),
@@ -22,7 +22,7 @@ class DebrisRainfallAgentCore:
                 break
                 
         if not self.excel_dir:
-            self.excel_dir = db_dir # 預設保留
+            self.excel_dir = db_dir
 
         json_path = debris_json if os.path.isabs(debris_json) else os.path.join(script_dir, debris_json)
         if not os.path.exists(json_path):
@@ -46,6 +46,7 @@ class DebrisRainfallAgentCore:
                     xls = pd.ExcelFile(file_path)
                     target_sheet = "全時段合併表" if "全時段合併表" in xls.sheet_names else xls.sheet_names[0]
                     df = pd.read_excel(xls, sheet_name=target_sheet)
+                    df['來源檔案'] = f
                     records.append(df)
                 except Exception:
                     pass
@@ -53,24 +54,26 @@ class DebrisRainfallAgentCore:
         if records:
             df_full = pd.concat(records, ignore_index=True)
             
-            # 強健的欄位名稱自動對應與容錯
+            # 強健的欄位名稱自動對應 (支援 WRA 英文與中文原欄位)
             rename_mapping = {}
             for c in df_full.columns.tolist():
                 c_str = str(c).strip()
-                if c_str in ['StNo', '測站編號', '測站代號']: rename_mapping[c] = '測站代號'
-                elif c_str in ['StName', '站名', '測站名稱']: rename_mapping[c] = '測站名稱'
-                elif c_str in ['AdmiName', '縣市名稱', '縣市']: rename_mapping[c] = '縣市'
-                elif c_str in ['Rain', '雨量', '累積雨量(mm)', '累積雨量_mm']: rename_mapping[c] = '累積雨量_mm'
-                elif c_str in ['EventNo', '事件編號', '事件代碼']: rename_mapping[c] = '事件代碼'
-                elif c_str in ['EventName', '災害名稱', '事件名稱']: rename_mapping[c] = '事件名稱'
-                elif c_str in ['BTime', '開始時間', '降雨起時間']: rename_mapping[c] = '降雨起時間'
-                elif c_str in ['ETime', '結束時間', '降雨訖時間']: rename_mapping[c] = '降雨訖時間'
-                elif c_str in ['Duration', '時段', '統計時長']: rename_mapping[c] = '統計時長'
+                if c_str in ['StNo', '測站編號', '測站代號', 'stno']: rename_mapping[c] = '測站代號'
+                elif c_str in ['StName', '站名', '測站名稱', 'stname']: rename_mapping[c] = '測站名稱'
+                elif c_str in ['AdmiName', '縣市名稱', '縣市', 'adminame']: rename_mapping[c] = '縣市'
+                elif c_str in ['Rain', '雨量', '累積雨量(mm)', '累積雨量_mm', 'rain']: rename_mapping[c] = '累積雨量_mm'
+                elif c_str in ['EventNo', '事件編號', '事件代碼', 'eventno']: rename_mapping[c] = '事件代碼'
+                elif c_str in ['EventName', '災害名稱', '事件名稱', 'eventname']: rename_mapping[c] = '事件名稱'
+                elif c_str in ['BTime', '開始時間', '降雨起時間', 'btime']: rename_mapping[c] = '降雨起時間'
+                elif c_str in ['ETime', '結束時間', '降雨訖時間', 'etime']: rename_mapping[c] = '降雨訖時間'
+                elif c_str in ['Duration', '時段', '統計時長', 'duration']: rename_mapping[c] = '統計時長'
 
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
 
-            for req_col in ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長']:
+            # 防禦性檢查：確保所有必要欄位絕對存在，避免 KeyError
+            required_cols = ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長', '來源檔案']
+            for req_col in required_cols:
                 if req_col not in df_full.columns:
                     df_full[req_col] = "-"
 
@@ -135,7 +138,7 @@ class DebrisRainfallAgentCore:
 
     def execute_query(self, debris_no, event_keyword=None):
         if self.all_rain_records.empty:
-            return "❌ 歷史雨量資料庫尚未載入或無資料，請確認 wrappers / excel_data 路徑。"
+            return "❌ 歷史雨量資料庫尚未載入或無資料，請確認 wra_rain_db/excel_data 路徑。"
 
         d_col = 'DebrisNO' if 'DebrisNO' in self.df_debris.columns else ('debrisno' if 'debrisno' in self.df_debris.columns else 'stream_id')
         stream_info = self.df_debris[self.df_debris[d_col] == debris_no]
@@ -182,11 +185,35 @@ class DebrisRainfallAgentCore:
 
         event_info = None
         if event_keyword:
-            clean_kw = re.sub(r'(颱風|豪雨|大雨|\(\d{4}\)|\d{4}_?)', '', event_keyword).strip()
-            df_ev_all = self.all_rain_records[
-                self.all_rain_records['事件代碼'].str.contains(event_keyword, case=False, na=False) |
-                self.all_rain_records['事件名稱'].str.contains(clean_kw if clean_kw else event_keyword, case=False, na=False)
-            ].copy()
+            keyword_str = str(event_keyword).strip()
+            df_ev_all = pd.DataFrame()
+
+            m_date = re.search(r'(\d{2})(\d{2})', keyword_str)
+            if m_date and len(keyword_str) <= 8:
+                mm, dd = m_date.groups()
+                try:
+                    base_dt = datetime(2024, int(mm), int(dd))
+                    prev_dt = base_dt - timedelta(days=1)
+                    next_dt = base_dt + timedelta(days=1)
+                    window_dates = [f"{mm}{dd}", prev_dt.strftime("%m%d"), next_dt.strftime("%m%d")]
+                except:
+                    window_dates = [f"{mm}{dd}"]
+
+                matched_rows = []
+                for _, row in self.all_rain_records.iterrows():
+                    row_str = f"{row.get('事件名稱', '')} {row.get('來源檔案', '')} {row.get('事件代碼', '')}"
+                    if any(wd in row_str for wd in window_dates):
+                        matched_rows.append(row)
+                if matched_rows:
+                    df_ev_all = pd.DataFrame(matched_rows)
+
+            if df_ev_all.empty:
+                clean_kw = re.sub(r'(颱風|豪雨|大雨|\(\d{4}\)|\d{4}_?)', '', keyword_str).strip()
+                df_ev_all = self.all_rain_records[
+                    self.all_rain_records['事件代碼'].str.contains(keyword_str, case=False, na=False) |
+                    self.all_rain_records['事件名稱'].str.contains(clean_kw if clean_kw else keyword_str, case=False, na=False) |
+                    self.all_rain_records['來源檔案'].str.contains(keyword_str, case=False, na=False)
+                ].copy()
 
             if not df_ev_all.empty:
                 ev_name = df_ev_all.iloc[0]['事件名稱']
@@ -222,5 +249,7 @@ class DebrisRainfallAgentCore:
             response_text += f"\n🌪️ **【指定事件降雨：{event_info['name']}】** *(參考來源: {event_info['source']})*\n"
             for d in self.durations:
                 response_text += f"• {d}：{event_info['vals'].get(d, '-')}\n"
+        elif event_keyword:
+            response_text += f"\n⚠️ **【指定事件檢索】**：查無符合 [{event_keyword}]（含前後一天時間視窗）的降雨事件紀錄。\n"
 
         return response_text
