@@ -177,12 +177,16 @@ class DebrisRainfallAgentCore:
         if df_sub.empty:
             return f"❌ 參考雨量站 [{active_name}] 於歷史雨量庫中查無紀錄。"
 
+        # 處理歷史最大降雨紀錄的顯示格式（自動移除括號與編號，僅保留事件名稱）
         hist_max = {}
         for d in self.durations:
             df_d = df_sub[df_sub['統計時長'] == d]
             if not df_d.empty:
                 top = df_d.sort_values(by='累積雨量_mm', ascending=False).iloc[0]
-                hist_max[d] = f"{top['累積雨量_mm']} mm [{top['事件名稱']} ({top['事件代碼']})]"
+                raw_event_name = f"{top['事件名稱']} ({top['事件代碼']})"
+                # 使用 regex 將括號及內部的編號清除，僅保留事件名稱
+                clean_event_name = re.sub(r'\s*\(.*?\)', '', raw_event_name).strip()
+                hist_max[d] = f"{top['累積雨量_mm']} mm [{clean_event_name}]"
             else:
                 hist_max[d] = "-"
 
@@ -221,6 +225,8 @@ class DebrisRainfallAgentCore:
             if not df_ev_all.empty:
                 ev_name = df_ev_all.iloc[0]['事件名稱']
                 ev_code = df_ev_all.iloc[0]['事件代碼']
+                raw_full_ev_name = f"{ev_name} ({ev_code})"
+                clean_ev_name = re.sub(r'\s*\(.*?\)', '', raw_full_ev_name).strip()
                 
                 df_ev_matched = df_ev_all[(df_ev_all['測站代號'].isin(st1_cand)) | ((df_ev_all['測站名稱'] == st1_name) & (df_ev_all['縣市'] == county))]
                 src_lvl = "原參考站"
@@ -236,7 +242,7 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = f"{top_sub['累積雨量_mm']} mm"
                         else:
                             ev_vals[d] = "無提供"
-                event_info = {'name': f"{ev_name} ", 'source': src_lvl, 'vals': ev_vals}
+                event_info = {'name': clean_ev_name, 'source': src_lvl, 'vals': ev_vals}
 
         response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
