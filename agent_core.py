@@ -38,9 +38,6 @@ class DebrisRainfallAgentCore:
         if records:
             df_full = pd.concat(records, ignore_index=True)
             
-            # -------------------------------------------------------------
-            # 強健的欄位名稱自動對應與容錯 (防範 KeyError)
-            # -------------------------------------------------------------
             rename_mapping = {}
             cols = df_full.columns.tolist()
             
@@ -59,7 +56,6 @@ class DebrisRainfallAgentCore:
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
 
-            # 補齊必要欄位
             for req_col in ['測站代號', '測站名稱', '縣市', '累積雨量_mm', '事件代碼', '事件名稱', '統計時長']:
                 if req_col not in df_full.columns:
                     df_full[req_col] = "-"
@@ -69,7 +65,6 @@ class DebrisRainfallAgentCore:
             df_full['縣市'] = df_full['縣市'].astype(str).str.strip()
             df_full['累積雨量_mm'] = pd.to_numeric(df_full['累積雨量_mm'], errors='coerce').fillna(0.0)
             
-            # 正規化「統計時長」
             def norm_duration(d_str):
                 d_str = str(d_str).strip()
                 if "總累計" in d_str or "事件總" in d_str or d_str == "0":
@@ -97,7 +92,7 @@ class DebrisRainfallAgentCore:
     def _find_event_fallback(self, event_df_all, county, town, vill):
         def check_streams(sub_streams):
             for _, r in sub_streams.iterrows():
-                for sid, sname in [(r['STID1'], r['STName1']), (r.get('STID2'], r.get('STName2'))]:
+                for sid, sname in [(r['STID1'], r['STName1']), (r.get('STID2'), r.get('STName2'))]:
                     if sid and sname:
                         cand = self._get_station_aliases(sid)
                         matched = event_df_all[(event_df_all['測站代號'].isin(cand)) | ((event_df_all['測站名稱'] == sname) & (event_df_all['縣市'] == county))]
@@ -121,7 +116,7 @@ class DebrisRainfallAgentCore:
 
         stream_info = self.df_debris[self.df_debris['DebrisNO'] == debris_no]
         if stream_info.empty:
-            return f"❌ 查無土石流潛勢溪流編號：{debris_no}。"
+            return f"❌ 查無土石流潛勢溪流編號：{debris_no}，請確認代碼是否正確。"
 
         stream = stream_info.iloc[0]
         county, town, vill = stream['County'], stream['Town'], stream['Vill']
