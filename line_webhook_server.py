@@ -197,50 +197,58 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                 user_text = event.message.text.strip()
                 parts = user_text.split()
                 
-                # 智慧判斷：若開頭為潛勢溪流編號（如 屏縣DF021），優先觸發雨量查詢 Agent
-                if len(parts) > 0 and ("DF" in parts[0] or "縣" in parts[0] or "市" in parts[0] or "鄉" in parts[0]):
-                    debris_no = parts[0]
-                    event_kw = parts[1] if len(parts) > 1 else None
-                    
-                    # 調用共用核心執行雨量與歷史事件查詢（自動支援新擴充事件與日期視窗比對）
-                    rain_result_md = rain_agent.execute_query(debris_no, event_kw)
-                    reply_msg = TextMessage(text=rain_result_md)
+                # 1. 查詢 Turso 資料庫 (取得原本完整的報告卡片與風險歷程、PDF 下載)
+                raw_records = query_turso_db(user_text)
+
+                messages_to_reply = []
+
+                if not raw_records:
+                    reply_text = (
+                        f"🔍 查詢關鍵字：「{user_text}」\n\n"
+                        "⚠️ 查無相符的潛勢溪流調查紀錄。\n"
+                        "💡 建議輸入：\n"
+                        "• 溪流編號 (如：屏縣DF021)\n"
+                        "• 鄉鎮村里 (如：和平區、達觀里)"
+                    )
+                    messages_to_reply.append(TextMessage(text=reply_text))
                 else:
-                    # 預設觸發 Turso 報告卡片檢索
-                    raw_records = query_turso_db(user_text)
-                    if not raw_records:
-                        reply_msg = TextMessage(
-                            text=f"🔍 查詢關鍵字：「{user_text}」\n\n"
-                                 "⚠️ 查無相符紀錄。\n"
-                                 "💡 建議輸入：\n"
-                                 "• 雨量與事件查詢：`屏縣DF021` 或 `屏縣DF021 0728豪雨`\n"
-                                 "• 報告卡片查詢：`和平區`、`投縣DF135`"
-                        )
-                    else:
-                        grouped_streams = defaultdict(list)
-                        for r in raw_records:
-                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist = r
-                            v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
-                            h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
-                            yr = parse_report_year(fname)
-                            stream_key = sid.strip() if sid else f"{cty}{twn}未編號"
-                            grouped_streams[stream_key].append({
-                                "stream_id": sid, "county": cty, "township": twn, "villages": v_list,
-                                "disaster_history": h_list, "adjustments": adj, "file_name": fname,
-                                "storage_group": s_grp, "risk_history": r_hist, "year": yr
-                            })
+                    grouped_streams = defaultdict(list)
+                    for r in raw_records:
+                        sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist = r
+                        v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
+                        h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
+                        yr = parse_report_year(fname)
+                        stream_key = sid.strip() if sid else f"{cty}{twn}未編號"
+                        grouped_streams[stream_key].append({
+                            "stream_id": sid, "county": cty, "township": twn, "villages": v_list,
+                            "disaster_history": h_list, "adjustments": adj, "file_name": fname,
+                            "storage_group": s_grp, "risk_history": r_hist, "year": yr
+                        })
 
-                        bubbles = []
-                        for sid_key, recs in list(grouped_streams.items())[:5]:
-                            recs.sort(key=lambda x: x["year"], reverse=True)
-                            bubbles.append(build_stream_flex_bubble(sid_key, recs))
+                    bubbles = []
+                    target_stream_id = None
+                    for sid_key, recs in list(grouped_streams.items())[:5]:
+                        recs.sort(key=lambda x: x["year"], reverse=True)
+                        bubbles.append(build_stream_flex_bubble(sid_key, recs))
+                        if not target_stream_id:
+                            target_stream_id = sid_key  # 記錄第一筆命中之溪流編號供雨量查詢使用
 
-                        flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
-                        reply_msg = FlexMessage(
+                    flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
+                    
+                    # 加入原本的 Flex 視覺卡片（含風險歷程、沿革、PDF 下載）
+                    messages_to_reply.append(
+                        FlexMessage(
                             alt_text=f"⛰️ 找到 {len(grouped_streams)} 條相關潛勢溪流調查資料",
                             contents=FlexContainer.from_json(json.dumps(flex_payload))
                         )
+                    )
 
-                line_bot_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[reply_msg]))
+                    # 2. 【新增】同步附加該溪流的歷史雨量與空間回退統計訊息
+                    if target_stream_id and ("DF" in target_stream_id or len(target_stream_id) >= 5):
+                        event_kw = parts[1] if len(parts) > 1 else None
+                        rain_result_md = rain_agent.execute_query(target_stream_id, event_kw)
+                        messages_to_reply.append(TextMessage(text=rain_result_md))
+
+                line_bot_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=messages_to_reply))
 
     return "OK"
