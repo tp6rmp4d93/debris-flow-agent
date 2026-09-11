@@ -6,9 +6,28 @@ import pandas as pd
 class DebrisRainfallAgentCore:
     def __init__(self, db_dir="wra_rain_db/excel_data", debris_json="GetDebrisRainData.json"):
         script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
-        self.excel_dir = db_dir if os.path.exists(db_dir) else os.path.join(script_dir, db_dir)
         
+        # 智慧尋找正確的 excel 資料夾路徑
+        candidate_paths = [
+            db_dir,
+            os.path.join(script_dir, "wra_rain_db", "excel_data"),
+            os.path.join(os.getcwd(), "wra_rain_db", "excel_data"),
+            "wra_rain_db/excel_data"
+        ]
+        
+        self.excel_dir = None
+        for p in candidate_paths:
+            if p and os.path.exists(p) and any(f.endswith('.xlsx') for f in os.listdir(p)):
+                self.excel_dir = p
+                break
+                
+        if not self.excel_dir:
+            self.excel_dir = db_dir # 預設保留
+
         json_path = debris_json if os.path.isabs(debris_json) else os.path.join(script_dir, debris_json)
+        if not os.path.exists(json_path):
+            json_path = os.path.join(os.getcwd(), debris_json)
+
         with open(json_path, 'r', encoding='utf-8') as f:
             self.df_debris = pd.DataFrame(json.load(f))
             
@@ -18,11 +37,7 @@ class DebrisRainfallAgentCore:
     def _load_database(self):
         records = []
         if not os.path.exists(self.excel_dir):
-            alt_path = "wra_rain_db/excel_data"
-            if os.path.exists(alt_path):
-                self.excel_dir = alt_path
-            else:
-                return pd.DataFrame()
+            return pd.DataFrame()
 
         for f in os.listdir(self.excel_dir):
             if f.endswith('.xlsx'):
@@ -38,20 +53,19 @@ class DebrisRainfallAgentCore:
         if records:
             df_full = pd.concat(records, ignore_index=True)
             
+            # 強健的欄位名稱自動對應與容錯
             rename_mapping = {}
-            cols = df_full.columns.tolist()
-            
-            for c in cols:
+            for c in df_full.columns.tolist():
                 c_str = str(c).strip()
-                if c_str in ['StNo', '測站編號']: rename_mapping[c] = '測站代號'
-                elif c_str in ['StName', '站名']: rename_mapping[c] = '測站名稱'
-                elif c_str in ['AdmiName', '縣市名稱']: rename_mapping[c] = '縣市'
-                elif c_str in ['Rain', '雨量', '累積雨量(mm)']: rename_mapping[c] = '累積雨量_mm'
-                elif c_str in ['EventNo', '事件編號']: rename_mapping[c] = '事件代碼'
-                elif c_str in ['EventName', '災害名稱']: rename_mapping[c] = '事件名稱'
-                elif c_str in ['BTime', '開始時間']: rename_mapping[c] = '降雨起時間'
-                elif c_str in ['ETime', '結束時間']: rename_mapping[c] = '降雨訖時間'
-                elif c_str in ['Duration', '時段']: rename_mapping[c] = '統計時長'
+                if c_str in ['StNo', '測站編號', '測站代號']: rename_mapping[c] = '測站代號'
+                elif c_str in ['StName', '站名', '測站名稱']: rename_mapping[c] = '測站名稱'
+                elif c_str in ['AdmiName', '縣市名稱', '縣市']: rename_mapping[c] = '縣市'
+                elif c_str in ['Rain', '雨量', '累積雨量(mm)', '累積雨量_mm']: rename_mapping[c] = '累積雨量_mm'
+                elif c_str in ['EventNo', '事件編號', '事件代碼']: rename_mapping[c] = '事件代碼'
+                elif c_str in ['EventName', '災害名稱', '事件名稱']: rename_mapping[c] = '事件名稱'
+                elif c_str in ['BTime', '開始時間', '降雨起時間']: rename_mapping[c] = '降雨起時間'
+                elif c_str in ['ETime', '結束時間', '降雨訖時間']: rename_mapping[c] = '降雨訖時間'
+                elif c_str in ['Duration', '時段', '統計時長']: rename_mapping[c] = '統計時長'
 
             if rename_mapping:
                 df_full = df_full.rename(columns=rename_mapping)
@@ -92,18 +106,27 @@ class DebrisRainfallAgentCore:
     def _find_event_fallback(self, event_df_all, county, town, vill):
         def check_streams(sub_streams):
             for _, r in sub_streams.iterrows():
-                for sid, sname in [(r['STID1'], r['STName1']), (r.get('STID2'), r.get('STName2'))]:
-                    if sid and sname:
-                        cand = self._get_station_aliases(sid)
-                        matched = event_df_all[(event_df_all['測站代號'].isin(cand)) | ((event_df_all['測站名稱'] == sname) & (event_df_all['縣市'] == county))]
+                sid = r.get('STID1') or r.get('stid1')
+                sname = r.get('STName1') or r.get('stname1')
+                sid2 = r.get('STID2') or r.get('stid2')
+                sname2 = r.get('STName2') or r.get('stname2')
+                
+                for s_id, s_name in [(sid, sname), (sid2, sname2)]:
+                    if s_id and s_name:
+                        cand = self._get_station_aliases(s_id)
+                        matched = event_df_all[(event_df_all['測站代號'].isin(cand)) | ((event_df_all['測站名稱'] == s_name) & (event_df_all['縣市'] == county))]
                         if not matched.empty:
-                            return matched, sname, sid
+                            return matched, s_name, s_id
             return pd.DataFrame(), None, None
 
+        c_col = 'County' if 'County' in self.df_debris.columns else 'county'
+        t_col = 'Town' if 'Town' in self.df_debris.columns else ('town' if 'town' in self.df_debris.columns else 'township')
+        v_col = 'Vill' if 'Vill' in self.df_debris.columns else ('vill' if 'vill' in self.df_debris.columns else 'villages')
+
         for streams, lvl in [
-            (self.df_debris[(self.df_debris['County']==county) & (self.df_debris['Town']==town) & (self.df_debris['Vill']==vill)], f"同村里 ({town}{vill})"),
-            (self.df_debris[(self.df_debris['County']==county) & (self.df_debris['Town']==town)], f"同鄉鎮 ({town})"),
-            (self.df_debris[self.df_debris['County']==county], f"同縣市 ({county})")
+            (self.df_debris[(self.df_debris[c_col]==county) & (self.df_debris[t_col]==town) & (self.df_debris[v_col]==vill)], f"同村里 ({town}{vill})"),
+            (self.df_debris[(self.df_debris[c_col]==county) & (self.df_debris[t_col]==town)], f"同鄉鎮 ({town})"),
+            (self.df_debris[self.df_debris[c_col]==county], f"同縣市 ({county})")
         ]:
             m, name, sid = check_streams(streams)
             if not m.empty:
@@ -112,16 +135,29 @@ class DebrisRainfallAgentCore:
 
     def execute_query(self, debris_no, event_keyword=None):
         if self.all_rain_records.empty:
-            return "❌ 歷史雨量資料庫尚未載入或無資料。"
+            return "❌ 歷史雨量資料庫尚未載入或無資料，請確認 wrappers / excel_data 路徑。"
 
-        stream_info = self.df_debris[self.df_debris['DebrisNO'] == debris_no]
+        d_col = 'DebrisNO' if 'DebrisNO' in self.df_debris.columns else ('debrisno' if 'debrisno' in self.df_debris.columns else 'stream_id')
+        stream_info = self.df_debris[self.df_debris[d_col] == debris_no]
         if stream_info.empty:
-            return f"❌ 查無土石流潛勢溪流編號：{debris_no}，請確認代碼是否正確。"
+            return f"❌ 查無土石流潛勢溪流編號：{debris_no}。"
 
         stream = stream_info.iloc[0]
-        county, town, vill = stream['County'], stream['Town'], stream['Vill']
-        st1_id, st1_name = stream['STID1'], stream['STName1']
-        st2_id, st2_name = stream.get('STID2'), stream.get('STName2')
+        
+        def get_s_val(s, keys, default=""):
+            for k in keys:
+                if k in s and pd.notna(s[k]):
+                    return s[k]
+            return default
+
+        county = get_s_val(stream, ['County', 'county'])
+        town = get_s_val(stream, ['Town', 'town', 'township'])
+        vill = get_s_val(stream, ['Vill', 'vill', 'villages'])
+        st1_id = get_s_val(stream, ['STID1', 'stid1'])
+        st1_name = get_s_val(stream, ['STName1', 'stname1'])
+        st2_id = get_s_val(stream, ['STID2', 'stid2'])
+        st2_name = get_s_val(stream, ['STName2', 'stname2'])
+        alert_val = get_s_val(stream, ['AlertValue', 'alert_value'], 0)
 
         st1_cand = self._get_station_aliases(st1_id)
         df_sub = self.all_rain_records[(self.all_rain_records['測站代號'].isin(st1_cand)) | ((self.all_rain_records['測站名稱'] == st1_name) & (self.all_rain_records['縣市'] == county))].copy()
@@ -175,7 +211,7 @@ class DebrisRainfallAgentCore:
         response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
         response_text += f"- **地理位置**：{county}{town}{vill}\n"
-        response_text += f"- **警戒基準值**：`{stream['AlertValue']} mm`\n"
+        response_text += f"- **警戒基準值**：`{alert_val} mm`\n"
         response_text += f"- **參考雨量站**：{active_name} ({active_id})\n\n"
 
         response_text += f"📊 **【歷史最大降雨紀錄】**\n"
