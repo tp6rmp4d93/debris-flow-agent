@@ -238,21 +238,20 @@ class DebrisRainfallAgentCore:
                             ev_vals[d] = "無提供"
                 event_info = {'name': f"{ev_name} ({ev_code})", 'source': src_lvl, 'vals': ev_vals}
 
-        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n"
+        response_text = f"📍 **【土石流潛勢溪流雨量查詢結果】**\n\n"
         response_text += f"- **溪流編號**：`{debris_no}`\n"
         response_text += f"- **地理位置**：{county}{town}{vill}\n"
         response_text += f"- **警戒基準值**：`{alert_val} mm`\n"
-        response_text += f"- **參考雨量站**：{active_name} ({active_id})\n"
+        response_text += f"- **參考雨量站**：{active_name} ({active_id})\n\n"
 
-        response_text += f"📊 **【歷史最大降雨紀錄】**\n"
+        response_text += f"📊 **【歷史最大降雨紀錄】**\n\n"
         for d in self.durations:
-            # 確保每個項目之間加上換行符號
-            response_text += f"• {d}：{hist_max[d]}\n"
+            response_text += f"- **{d}**：{hist_max[d]}\n"
 
         if event_info:
-            response_text += f"\n🌪️ **【指定事件降雨：{event_info['name']}】** *(參考來源: {event_info['source']})*\n"
+            response_text += f"\n🌪️ **【指定事件降雨：{event_info['name']}】** *(參考來源: {event_info['source']})*\n\n"
             for d in self.durations:
-                response_text += f"• {d}：{event_info['vals'].get(d, '-')}\n"
+                response_text += f"- **{d}**：{event_info['vals'].get(d, '-')}\n"
         elif event_keyword:
             response_text += f"\n⚠️ **【指定事件檢索】**：查無符合 [{event_keyword}]（含前後一天時間視窗）的降雨事件紀錄。\n"
 
