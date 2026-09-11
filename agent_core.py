@@ -4,7 +4,7 @@ import json
 import pandas as pd
 
 class DebrisRainfallAgentCore:
-    def __init__(self, db_dir="水利署全歷史事件雨量資料庫/事件明細Excel", debris_json="GetDebrisRainData.json"):
+    def __init__(self, db_dir="wra_rain_db/excel_data", debris_json="GetDebrisRainData.json"):
         script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
         self.excel_dir = db_dir if os.path.exists(db_dir) else os.path.join(script_dir, db_dir)
         
@@ -18,7 +18,7 @@ class DebrisRainfallAgentCore:
     def _load_database(self):
         records = []
         if not os.path.exists(self.excel_dir):
-            alt_path = "水利署歷史事件雨量資料庫/事件明細Excel"
+            alt_path = "wra_rain_db/excel_data"
             if os.path.exists(alt_path):
                 self.excel_dir = alt_path
             else:
