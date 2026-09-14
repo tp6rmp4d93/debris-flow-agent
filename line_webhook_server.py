@@ -95,8 +95,15 @@ def query_turso_db(keyword: str):
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
     headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
     pat = f"%{keyword.strip()}%"
-    sql = "SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history FROM streams WHERE stream_id LIKE ? OR county LIKE ? OR township LIKE ? OR villages LIKE ? OR file_name LIKE ? ORDER BY file_name DESC LIMIT 15"
-    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql, "args": [{"type": "text", "value": pat}] * 5}}, {"type": "close"}]}
+    
+    # 同時支援 stream_id, 縣市, 鄉鎮, 村里, 檔案名稱, 以及舊編號 (dbno_old) 的模糊查詢
+    sql = """
+        SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history, dbno_old 
+        FROM streams 
+        WHERE stream_id LIKE ? OR county LIKE ? OR township LIKE ? OR villages LIKE ? OR file_name LIKE ? OR dbno_old LIKE ? 
+        ORDER BY file_name DESC LIMIT 15
+    """
+    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql, "args": [{"type": "text", "value": pat}] * 6}}, {"type": "close"}]}
     try:
         resp = requests.post(http_url, headers=headers, json=payload, timeout=8)
         resp.raise_for_status()
@@ -215,7 +222,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                     if raw_records:
                         grouped_streams = defaultdict(list)
                         for r in raw_records:
-                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist = r
+                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist, db_old = r
                             v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
                             h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
                             yr = parse_report_year(fname)
@@ -223,7 +230,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                             grouped_streams[stream_key].append({
                                 "stream_id": sid, "county": cty, "township": twn, "villages": v_list,
                                 "disaster_history": h_list, "adjustments": adj, "file_name": fname,
-                                "storage_group": s_grp, "risk_history": r_hist, "year": yr
+                                "storage_group": s_grp, "risk_history": r_hist, "year": yr, "dbno_old": db_old
                             })
 
                         bubbles = []
