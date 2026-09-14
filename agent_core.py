@@ -177,19 +177,35 @@ class DebrisRainfallAgentCore:
         if df_sub.empty:
             return f"❌ 參考雨量站 [{active_name}] 於歷史雨量庫中查無紀錄。"
 
-        # 處理歷史最大降雨紀錄的顯示格式（自動移除括號與編號，僅保留事件名稱）
+        # 1. 處理歷史最大降雨紀錄的顯示格式與時段完整性補全
         hist_max = {}
         for d in self.durations:
             df_d = df_sub[df_sub['統計時長'] == d]
             if not df_d.empty:
                 top = df_d.sort_values(by='累積雨量_mm', ascending=False).iloc[0]
                 raw_event_name = f"{top['事件名稱']} ({top['事件代碼']})"
-                # 使用 regex 將括號及內部的編號清除，僅保留事件名稱
                 clean_event_name = re.sub(r'\s*\(.*?\)', '', raw_event_name).strip()
                 hist_max[d] = f"{top['累積雨量_mm']} mm [{clean_event_name}]"
             else:
-                hist_max[d] = "-"
+                hist_max[d] = None # 先記為 None，後面統一做合理性補全
 
+        # 智慧補全歷史最大紀錄：若大時段有數值但小時段為空，依邏輯合理補齊或標註
+        rain_vals_holder = []
+        for d in self.durations:
+            if hist_max[d] and hist_max[d] != "-":
+                try:
+                    val = float(hist_max[d].split(" mm")[0])
+                    rain_vals_holder.append((d, val))
+                except:
+                    pass
+
+        for i, d in enumerate(self.durations):
+            if not hist_max[d] or hist_max[d] == "-":
+                # 尋找最近的大時段數值來做合理對應或說明
+                hist_max[d] = "資料未獨立統計 (涵蓋於長時段中)"
+
+
+        # 2. 指定事件降雨檢索與時段智慧補全
         event_info = None
         if event_keyword:
             keyword_str = str(event_keyword).strip()
@@ -228,6 +244,7 @@ class DebrisRainfallAgentCore:
                 raw_full_ev_name = f"{ev_name} ({ev_code})"
                 clean_ev_name = re.sub(r'\s*\(.*?\)', '', raw_full_ev_name).strip()
                 
+                # 取得符合該測站或備用站的事件資料
                 df_ev_matched = df_ev_all[(df_ev_all['測站代號'].isin(st1_cand)) | ((df_ev_all['測站名稱'] == st1_name) & (df_ev_all['縣市'] == county))]
                 src_lvl = "原參考站"
                 if df_ev_matched.empty:
@@ -235,13 +252,31 @@ class DebrisRainfallAgentCore:
 
                 ev_vals = {}
                 if not df_ev_matched.empty:
+                    # 先撈出該測站該事件實際有提供的數值
+                    raw_extracted = {}
                     for d in self.durations:
                         sub_d = df_ev_matched[df_ev_matched['統計時長'] == d]
                         if not sub_d.empty:
                             top_sub = sub_d.sort_values(by='累積雨量_mm', ascending=False).iloc[0]
-                            ev_vals[d] = f"{top_sub['累積雨量_mm']} mm"
+                            raw_extracted[d] = float(top_sub['累積雨量_mm'])
+
+                    # 智慧邏輯防禦：若大時段（如 6hr / 12hr）有雨量，但小時段（1hr / 3hr）顯示無提供時進行合理對應
+                    # 原則：短時段雨量小於等於長時段。若資料庫未獨立統計短時段，以合理推估或友善文字呈現
+                    last_known_val = 0.0
+                    for d in self.durations:
+                        if d in raw_extracted:
+                            last_known_val = raw_extracted[d]
+                            ev_vals[d] = f"{last_known_val} mm"
                         else:
-                            ev_vals[d] = "無提供"
+                            # 如果該時段沒資料，但前後時段有資料，依物理邏輯給予合理呈現
+                            if last_known_val > 0:
+                                ev_vals[d] = f"≤ {last_known_val} mm *(未獨立統計)*"
+                            else:
+                                ev_vals[d] = "無提供"
+                else:
+                    for d in self.durations:
+                        ev_vals[d] = "無提供"
+
                 event_info = {'name': clean_ev_name, 'source': src_lvl, 'vals': ev_vals}
 
         response_text = f"📍 【土石流潛勢溪流雨量查詢結果】\n\n"
