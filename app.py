@@ -210,7 +210,7 @@ def load_all_streams_data():
 
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
     headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
-    sql = "SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history FROM streams;"
+    sql = "SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history, dbno_old FROM streams;"
     payload = {"requests": [{"type": "execute", "stmt": {"sql": sql}}, {"type": "close"}]}
     
     try:
@@ -222,7 +222,7 @@ def load_all_streams_data():
         if not rows:
             return pd.DataFrame(columns=cols)
         df = pd.DataFrame(rows, columns=cols)
-        for col in ["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments", "file_name", "storage_group", "risk_history"]:
+        for col in ["stream_id", "county", "township", "villages", "disaster_history", "demarcation_adjustments", "file_name", "storage_group", "risk_history", " dbno_old"]:
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str)
         return df
@@ -297,6 +297,7 @@ with st.container():
             pat = search_kw.strip()
             mask = (
                 filtered_df["stream_id"].astype(str).str.contains(pat, case=False, na=False) |
+                filtered_df["dbno_old"].astype(str).str.contains(pat, case=False, na=False) |
                 filtered_df["file_name"].astype(str).str.contains(pat, case=False, na=False) |
                 filtered_df["county"].astype(str).str.contains(pat, case=False, na=False) |
                 filtered_df["township"].astype(str).str.contains(pat, case=False, na=False) |
@@ -355,28 +356,52 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =============================================================
-# TAB 1: 調查資料 (完整保留原有沿革與災情，並擴充內嵌雨量資訊)
+# TAB 1: 調查資料 (依溪流整併聚合 + 舊編號對照 + 歷年風險異動 + 擴充內嵌雨量資訊)
 # =============================================================
 with tab1:
     if not has_filter:
-        st.markdown('<div class="empty-state"><h4>🔍 尚未選擇查詢條件</h4><p>請於上方選擇縣市、鄉鎮或輸入溪流編號。</p></div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="empty-state">
+            <h4 style="margin:0 0 8px 0; color:#475569;">🔍 尚未選擇查詢條件</h4>
+            <p style="margin:0; font-size:14px;">請於上方選擇縣市、鄉鎮，或直接輸入溪流編號、舊編號（如：宜蘭A089）或村里名稱以調閱歷史調查資料。</p>
+        </div>
+        """, unsafe_allow_html=True)
     elif filtered_df.empty:
         st.warning("⚠️ 查無符合條件之溪流調查資料。")
     else:
         st.caption(f"📌 共涵蓋 **{len(grouped_streams)}** 條土石流潛勢溪流")
+        
         for sid, info in grouped_streams.items():
-            cty, twn = info["county"], info["township"]
+            cty = info["county"]
+            twn = info["township"]
             v_str = "、".join(sorted(info["villages"])) if info["villages"] else "未載明村里"
-            with st.expander(f"📌 【{sid}】 {cty} {twn}（{v_str}） ｜ 歷年報告：{info['report_count']} 份", expanded=(len(grouped_streams) == 1)):
+            adj = info["adjustments"]
+            r_history = info.get("risk_history", [])
+            h_list = info.get("disasters", [])
+            rep_cnt = info["report_count"]
+            db_old = info.get("dbno_old", "")
+            
+            # 舊編號標籤 (若有則顯示)
+            old_badge = f" <span style='color:#64748B; font-size:13px; font-weight:normal;'>[舊編號: {db_old}]</span>" if db_old else ""
+            title_text = f"📌 【{sid}】{cty} {twn}（{v_str}）{old_badge} ｜ 歷年報告：{rep_cnt} 份"
+            
+            with st.expander(title_text, expanded=(len(grouped_streams) == 1)):
+                # 若有舊編號，在卡片內部頂端再次清晰提示
+                if db_old:
+                    st.markdown(f"<div style='margin-bottom:8px; font-size:13px; color:#475569;'>🏷️ <b>前期調查舊編號</b>：<code>{db_old}</code></div>", unsafe_allow_html=True)
+
                 # 1. 劃設調整沿革
-                st.markdown(f"**📐 劃設調整沿革**：\n\n{info['adjustments']}")
+                st.markdown(f"**📐 劃設調整沿革**：\n\n{adj}")
+                
                 st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
                 
-                # 2. 歷年風險等級異動歷程
+                # 2. 歷年風險評估等級歷程 (垂直分行條列，手機版不破版)
                 st.markdown("**📊 歷年風險評估等級異動歷程**：")
-                if info["risk_history"]:
-                    sorted_asc = sorted(info["risk_history"], key=lambda x: x.get("year", 0))
-                    change_records, prev_risk = [], None
+                if r_history:
+                    sorted_asc = sorted(r_history, key=lambda x: x.get("year", 0))
+                    change_records = []
+                    prev_risk = None
+                    
                     for item in sorted_asc:
                         y = item.get("year")
                         r_val = str(item.get("risk", "")).strip()
@@ -387,33 +412,63 @@ with tab1:
                             elif r_val != prev_risk:
                                 change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
                                 prev_risk = r_val
+
                     sorted_changes = sorted(change_records, key=lambda x: x["year"], reverse=True)
+
+                    def get_risk_badge(r_val):
+                        if "高" in r_val:
+                            return f"<span style='background-color:#FEE2E2; color:#991B1B; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        elif "中" in r_val:
+                            return f"<span style='background-color:#FEF3C7; color:#92400E; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        elif "低" in r_val:
+                            return f"<span style='background-color:#DCFCE7; color:#166534; font-weight:bold; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+                        else:
+                            return f"<span style='background-color:#F1F5F9; color:#475569; padding:2px 8px; border-radius:4px;'>{r_val}</span>"
+
                     line_items = []
                     for idx, item in enumerate(sorted_changes):
-                        y, r_name, status = item["year"], item["risk"], item["status"]
-                        prefix = "🔸 <b>最近一次調整</b>：" if (idx == 0 and len(sorted_changes) > 1) else "🔹 "
-                        line_items.append(f"<div style='margin-bottom: 6px;'>{prefix}<b>[{y}年]</b> <span style='background:#E2E8F0; padding:2px 6px; border-radius:4px;'>{r_name}</span> （{status}）</div>")
-                    st.markdown(f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; font-size:13px;'>{''.join(line_items)}</div>", unsafe_allow_html=True)
+                        y = item["year"]
+                        r_name = item["risk"]
+                        status = item["status"]
+                        badge = get_risk_badge(r_name)
+                        status_tag = f"<span style='color:#64748B; font-size:12px; margin-left:6px;'>（{status}）</span>"
+                        
+                        prefix = "🔸 <b>最新現況</b>：" if (idx == 0 and len(sorted_changes) > 1) else "🔹 "
+                        line_items.append(f"<div style='margin-bottom: 6px;'>{prefix}<b>[{y}年]</b> {badge} {status_tag}</div>")
+
+                    st.markdown(f"""
+                    <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; padding:10px 14px; border-radius:6px; font-size:13px; line-height:1.6;">
+                        {''.join(line_items)}
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無公告風險等級紀錄</span>", unsafe_allow_html=True)
+                    st.markdown("<span style='color:#94A3B8; font-size:13px;'>• 尚無 2010～2026 公告風險等級紀錄</span>", unsafe_allow_html=True)
+
+                st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #CBD5E1;'>", unsafe_allow_html=True)
 
                 # 3. 歷年重大災害情勢
-                if info["disasters"]:
-                    st.markdown("<br>**🕒 歷年重大災害情勢**：", unsafe_allow_html=True)
-                    for d in info["disasters"]:
+                if h_list:
+                    st.markdown("**🕒 歷年重大災害情勢（彙整歷年調查紀錄）**：")
+                    for d in h_list:
                         yr = d.get("year", "歷史災害")
                         rf = d.get("rainfall_info", "")
                         dmg = d.get("scale_and_damage") or d.get("description", "無詳細說明")
+                        
                         rf_badge = f"<span style='color:#2563EB;font-size:12px;margin-left:8px;'>🌧️ 雨量：{rf}</span>" if (rf and rf != "未載明") else ""
-                        st.markdown(f'<div class="disaster-badge"><b>🚨 {yr}</b>{rf_badge}<br><span style="color:#334155;">{dmg}</span></div>', unsafe_allow_html=True)
+                        st.markdown(f"""
+                        <div class="disaster-badge">
+                            <b>🚨 {yr}</b>{rf_badge}<br>
+                            <span style="color:#334155;">{dmg}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.markdown("<span style='color:#94A3B8;font-size:13px;'>• 報告內無重大歷史災害紀錄</span>", unsafe_allow_html=True)
 
-                # 4. 【新增】將歷史雨量資訊直接內嵌至查詢結果中
+                # 4. 【新增】內嵌歷史極端雨量與空間回退統計（使用 st.container 完美呈現）
                 st.markdown("<hr style='margin:12px 0; border:0; border-top:1px solid #CBD5E1;'>", unsafe_allow_html=True)
                 st.markdown("**🌧️ 水利署歷史極端雨量與空間回退統計**：")
                 try:
                     rain_md = rain_agent.execute_query(sid)
-                    
-                    # 透過 Streamlit 原生 container 呈現，外觀乾淨且 100% 完美解析 Markdown
                     with st.container(border=True):
                         st.markdown(rain_md)
                 except Exception as e:
