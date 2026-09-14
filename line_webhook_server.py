@@ -210,11 +210,10 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                 
                 messages_to_reply = []
                 try:
-                    # 1. 完整以使用者輸入的文字（或第一部分）去 Turso 模糊查詢鄉鎮、村里或編號
+                    # 1. 查詢 Turso 資料庫 (取得完整的調查卡片、風險歷程、劃設沿革與 PDF 下載)
                     search_query = parts[0] if len(parts) > 1 and "DF" in parts[0] else user_text
                     raw_records = query_turso_db(search_query)
 
-                    # 若第一階段查無結果，嘗試用整個 user_text 再查一次
                     if not raw_records and search_query != user_text:
                         raw_records = query_turso_db(user_text)
 
@@ -222,7 +221,8 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                     if raw_records:
                         grouped_streams = defaultdict(list)
                         for r in raw_records:
-                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist, db_old = r
+                            # 確保安全解構所有欄位 (包含舊編號 db_old)
+                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist, db_old = r if len(r) >= 10 else (*r, "")
                             v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
                             h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
                             yr = parse_report_year(fname)
@@ -234,7 +234,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                             })
 
                         bubbles = []
-                        for sid_key, recs in list(grouped_streams.items())[:3]:
+                        for sid_key, recs in list(grouped_streams.items())[:3]: # 限制最多 3 個卡片避免超過 LINE 上限
                             recs.sort(key=lambda x: x["year"], reverse=True)
                             bubbles.append(build_stream_flex_bubble(sid_key, recs))
                             if not target_stream_id:
@@ -242,7 +242,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
 
                         flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
                         
-                        # 加入調查報告 Flex 卡片
+                        # 【重要】將原本的 Flex 視覺卡片（含風險歷程、沿革、PDF 下載按鈕）加入回覆清單
                         messages_to_reply.append(
                             FlexMessage(
                                 alt_text=f"⛰️ 找到 {len(grouped_streams)} 條相關潛勢溪流調查資料",
@@ -250,7 +250,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                             )
                         )
 
-                    # 2. 判斷是否需要附加雨量查詢（當輸入包含編號如 DF022，或有指定事件時）
+                    # 2. 判斷並附加歷史雨量統計文字
                     debris_no_candidate = None
                     event_kw = None
                     
@@ -258,9 +258,10 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                         debris_no_candidate = parts[0]
                         event_kw = parts[1] if len(parts) > 1 else None
                     elif target_stream_id and len(parts) > 1:
-                        # 如果使用者輸入像是 "泰武鄉 莫拉克" 或有第二個關鍵字且第一階段有找到對應溪流
                         debris_no_candidate = target_stream_id
                         event_kw = parts[1]
+                    elif target_stream_id and not messages_to_reply:
+                        debris_no_candidate = target_stream_id
 
                     if debris_no_candidate:
                         rain_result_md = rain_agent.execute_query(debris_no_candidate, event_kw)
@@ -282,6 +283,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                     messages_to_reply = [TextMessage(text=f"⚠️ 系統處理發生錯誤：{str(inner_e)}")]
 
                 try:
+                    # LINE 最多一次回發 5 則訊息，此處取前 5 則（通常為 1 個 Flex 卡片 + 1 個雨量文字）
                     line_bot_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=messages_to_reply[:5]))
                 except Exception as reply_e:
                     print(f"❌ [LineBot 回覆發送失敗]: {reply_e}")
