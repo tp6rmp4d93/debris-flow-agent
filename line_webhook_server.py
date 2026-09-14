@@ -32,6 +32,7 @@ CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+BASE_URL = os.getenv("RENDER_EXTERNAL_URL", "https://debris-flow-linebot.onrender.com")
 
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     print("⚠️ 警告: 請設定 LINE_CHANNEL_ACCESS_TOKEN 與 LINE_CHANNEL_SECRET 環境變數。")
@@ -44,7 +45,7 @@ r2_clients_cache = {}
 rain_agent = DebrisRainfallAgentCore()
 
 # -------------------------------------------------------------
-# 2. R2 智慧年份分群預簽名 (PDF 報告下載)
+# 2. R2 智慧年份分群預簽名與短網址重新導向
 # -------------------------------------------------------------
 def parse_report_year(file_name: str) -> int:
     match = re.search(r"^(19\d\d|20\d\d)", str(file_name or ""))
@@ -86,6 +87,13 @@ def get_r2_download_url(file_name: str, storage_group: str) -> str:
         return s3.generate_presigned_url(ClientMethod="get_object", Params={"Bucket": str(bucket_name).strip(), "Key": fn, "ResponseContentDisposition": disposition}, ExpiresIn=900)
     except Exception as e:
         return ""
+
+@app.get("/download")
+def redirect_to_r2(file: str, group: str = "R2_GRP_3"):
+    dl_url = get_r2_download_url(file, group)
+    if dl_url:
+        return RedirectResponse(url=dl_url)
+    return {"error": "File not found or expired"}, 404
 
 # -------------------------------------------------------------
 # 3. Turso 資料庫查詢 (歷年報告卡片)
@@ -157,9 +165,24 @@ def build_stream_flex_bubble(stream_id: str, group_records: list):
     report_buttons = []
     for rec in group_records:
         yr, fname, sgrp = rec.get("year"), rec.get("file_name"), rec.get("storage_group")
-        dl_url = get_r2_download_url(fname, sgrp)
-        if dl_url:
-            report_buttons.append({"type": "button", "action": {"type": "uri", "label": f"📄 下載 {yr}年報告" if yr > 0 else "📄 下載報告", "uri": dl_url}, "style": "primary", "color": "#2563EB" if yr >= 2016 else "#4B5563", "height": "sm", "margin": "xs"})
+        if fname:
+            # 透過自家的 /download 短網址包裝，避免 R2 預簽名網址過長導致 LINE 拒絕
+            encoded_fn = quote(str(fname))
+            encoded_sgrp = quote(determine_storage_group(str(fname), sgrp))
+            short_download_url = f"{BASE_URL}/download?file={encoded_fn}&group={encoded_sgrp}"
+            
+            report_buttons.append({
+                "type": "button", 
+                "action": {
+                    "type": "uri", 
+                    "label": f"📄 下載 {yr}年報告" if yr > 0 else "📄 下載報告", 
+                    "uri": short_download_url
+                }, 
+                "style": "primary", 
+                "color": "#2563EB" if yr >= 2016 else "#4B5563", 
+                "height": "sm", 
+                "margin": "xs"
+            })
 
     bubble = {
         "type": "bubble", "size": "mega",
