@@ -6,13 +6,14 @@ from urllib.parse import quote
 import requests
 import boto3
 from botocore.config import Config
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, Response, status
 from linebot.v3.webhook import WebhookParser
 from linebot.v3.messaging import (
     Configuration,
     ApiClient,
     MessagingApi,
     ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage,
     FlexMessage,
     FlexContainer
@@ -20,19 +21,16 @@ from linebot.v3.messaging import (
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 
-# 導入共用的雨量與空間回退 AI Agent 核心
-from agent_core import DebrisRainfallAgentCore
-
 # -------------------------------------------------------------
 # 1. 服務初始化與環境變數設定
 # -------------------------------------------------------------
-app = FastAPI(title="Debris Flow LineBot Agent with Rainfall")
+app = FastAPI(title="Debris Flow LineBot Agent")
 
 CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
-BASE_URL = os.getenv("RENDER_EXTERNAL_URL", "https://debris-flow-linebot.onrender.com")
+ADMIN_LINE_USER_ID = os.getenv("ADMIN_LINE_USER_ID", "")  # 維護人員 LINE ID (U開頭33碼)
 
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     print("⚠️ 警告: 請設定 LINE_CHANNEL_ACCESS_TOKEN 與 LINE_CHANNEL_SECRET 環境變數。")
@@ -41,17 +39,16 @@ parser = WebhookParser(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 r2_clients_cache = {}
 
-# 初始化雨量 Agent 核心（自動掃描 wra_rain_db/excel_data/ 中的新舊事件檔案）
-rain_agent = DebrisRainfallAgentCore()
-
 # -------------------------------------------------------------
-# 2. R2 智慧年份分群預簽名與短網址重新導向
+# 2. 解析年份與 R2 智慧分群預簽名下載
 # -------------------------------------------------------------
 def parse_report_year(file_name: str) -> int:
+    """從檔名解析 4 位數年份 (如 2014_...)"""
     match = re.search(r"^(19\d\d|20\d\d)", str(file_name or ""))
     return int(match.group(1)) if match else 0
 
 def determine_storage_group(file_name: str, storage_group: str) -> str:
+    """依年份自動對應所屬 R2 儲存群組"""
     year = parse_report_year(file_name)
     if year > 0:
         if year <= 2007: return "R2_GRP_1"
@@ -59,155 +56,503 @@ def determine_storage_group(file_name: str, storage_group: str) -> str:
         elif 2011 <= year <= 2015: return "R2_GRP_3"
         elif 2016 <= year <= 2020: return "R2_GRP_4"
         else: return "R2_GRP_5"
+
     if storage_group and storage_group.strip():
         s = storage_group.strip()
-        if s.lower() not in ["none", "nan", "null"]: return s
+        if s.lower() not in ["none", "nan", "null"]:
+            return s
+
     return "R2_GRP_3"
 
 def get_r2_download_url(file_name: str, storage_group: str) -> str:
-    if not file_name: return ""
+    """生成 15 分鐘有效的 R2 預簽名下載 URL (支援中文檔名編碼)"""
+    if not file_name:
+        return ""
+
     fn = str(file_name).strip()
     grp = determine_storage_group(fn, storage_group)
+
     account_id = os.getenv(f"{grp}_ACCOUNT_ID") or os.getenv("R2_ACCOUNT_ID")
     access_key = os.getenv(f"{grp}_ACCESS_KEY") or os.getenv("R2_ACCESS_KEY")
     secret_key = os.getenv(f"{grp}_SECRET_KEY") or os.getenv("R2_SECRET_KEY")
     bucket_name = os.getenv(f"{grp}_BUCKET") or os.getenv("R2_BUCKET")
-    if not all([account_id, access_key, secret_key, bucket_name]): return ""
+
+    if not all([account_id, access_key, secret_key, bucket_name]):
+        return ""
+
     try:
         cache_key = f"{grp}_{account_id}"
         if cache_key not in r2_clients_cache:
             r2_clients_cache[cache_key] = boto3.client(
-                "s3", endpoint_url=f"https://{str(account_id).strip()}.r2.cloudflarestorage.com",
-                aws_access_key_id=str(access_key).strip(), aws_secret_access_key=str(secret_key).strip(),
-                region_name="auto", config=Config(signature_version="s3v4")
+                "s3",
+                endpoint_url=f"https://{str(account_id).strip()}.r2.cloudflarestorage.com",
+                aws_access_key_id=str(access_key).strip(),
+                aws_secret_access_key=str(secret_key).strip(),
+                region_name="auto",
+                config=Config(signature_version="s3v4")
             )
         s3 = r2_clients_cache[cache_key]
+
         encoded_fn = quote(fn)
         disposition = f"attachment; filename*=UTF-8''{encoded_fn}"
-        return s3.generate_presigned_url(ClientMethod="get_object", Params={"Bucket": str(bucket_name).strip(), "Key": fn, "ResponseContentDisposition": disposition}, ExpiresIn=900)
+
+        return s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={
+                "Bucket": str(bucket_name).strip(),
+                "Key": fn,
+                "ResponseContentDisposition": disposition
+            },
+            ExpiresIn=900
+        )
     except Exception as e:
+        print(f"❌ R2 預簽名生成異常 ({fn}): {e}")
         return ""
 
-@app.get("/download")
-def redirect_to_r2(file: str, group: str = "R2_GRP_3"):
-    dl_url = get_r2_download_url(file, group)
-    if dl_url:
-        return RedirectResponse(url=dl_url)
-    return {"error": "File not found or expired"}, 404
-
 # -------------------------------------------------------------
-# 3. Turso 資料庫查詢 (歷年報告卡片)
+# 3. Turso 資料庫查詢 (支援新舊編號、鄉鎮、村里與歷程)
 # -------------------------------------------------------------
 def query_turso_db(keyword: str):
-    if not TURSO_URL or not TURSO_TOKEN or not keyword: return []
+    """查詢相符的溪流調查紀錄 (最多撈取 15 筆做聚合)"""
+    if not TURSO_URL or not TURSO_TOKEN or not keyword:
+        return []
+
     http_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
-    headers = {"Authorization": f"Bearer {TURSO_TOKEN.strip()}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {TURSO_TOKEN.strip()}",
+        "Content-Type": "application/json"
+    }
     pat = f"%{keyword.strip()}%"
     
-    # 同時支援 stream_id, 縣市, 鄉鎮, 村里, 檔案名稱, 以及舊編號 (dbno_old) 的模糊查詢
     sql = """
-        SELECT stream_id, county, township, villages, disaster_history, demarcation_adjustments, file_name, storage_group, risk_history, dbno_old 
+        SELECT 
+            stream_id, 
+            county, 
+            township, 
+            villages, 
+            disaster_history, 
+            demarcation_adjustments, 
+            file_name, 
+            storage_group, 
+            risk_history, 
+            dbno_old
         FROM streams 
-        WHERE stream_id LIKE ? OR county LIKE ? OR township LIKE ? OR villages LIKE ? OR file_name LIKE ? OR dbno_old LIKE ? 
-        ORDER BY file_name DESC LIMIT 15
+        WHERE stream_id LIKE ? OR dbno_old LIKE ? OR county LIKE ? OR township LIKE ? OR villages LIKE ? OR file_name LIKE ?
+        ORDER BY file_name DESC
+        LIMIT 15;
     """
-    payload = {"requests": [{"type": "execute", "stmt": {"sql": sql, "args": [{"type": "text", "value": pat}] * 6}}, {"type": "close"}]}
+    payload = {
+        "requests": [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": [{"type": "text", "value": pat}] * 6
+                }
+            },
+            {"type": "close"}
+        ]
+    }
     try:
         resp = requests.post(http_url, headers=headers, json=payload, timeout=8)
         resp.raise_for_status()
-        return [[col.get("value") for col in r] for r in resp.json()["results"][0]["response"]["result"].get("rows", [])]
-    except: return []
+        res = resp.json()["results"][0]["response"]["result"]
+        return [[col.get("value") for col in r] for r in res.get("rows", [])]
+    except Exception as e:
+        print(f"❌ Turso 資料庫查詢失敗: {e}")
+        return []
 
-def build_risk_history_boxes(group_records: list):
+# -------------------------------------------------------------
+# 4. 解析與建構風險等級異動歷程 (垂直條列・手機友善)
+# -------------------------------------------------------------
+def extract_valid_risk_json(group_records: list) -> str:
+    """從溪流的多份報告紀錄中尋找有效的 risk_history JSON"""
     for rec in group_records:
         raw = rec.get("risk_history")
         if raw and str(raw).strip().startswith("[") and str(raw).strip() != "[]":
-            try:
-                r_list = json.loads(str(raw).strip())
-                sorted_asc = sorted(r_list, key=lambda x: x.get("year", 0))
-                change_records, prev_risk = [], None
-                for item in sorted_asc:
-                    y, r_val = item.get("year"), str(item.get("risk", "")).strip()
-                    if r_val and r_val.lower() not in ['nan', 'none', 'null', '']:
-                        if prev_risk is None:
-                            change_records.append({"year": y, "risk": r_val, "status": "首次公告劃設"})
-                            prev_risk = r_val
-                        elif r_val != prev_risk:
-                            change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
-                            prev_risk = r_val
-                sorted_desc = sorted(change_records, key=lambda x: x["year"], reverse=True)
-                risk_boxes = []
-                for idx, item in enumerate(sorted_desc):
-                    y, r_name, status = item["year"], item["risk"], item["status"]
-                    bg_color, text_color = ("#FEE2E2", "#991B1B") if "高" in r_name else ("#FEF3C7", "#92400E") if "中" in r_name else ("#DCFCE7", "#166534") if "低" in r_name else ("#F3F4F6", "#374151")
-                    prefix = "🔸 [現況] " if idx == 0 and len(sorted_desc) > 1 else "🔹 "
-                    risk_boxes.append({
-                        "type": "box", "layout": "horizontal", "alignItems": "center", "margin": "xs",
-                        "contents": [
-                            {"type": "text", "text": f"{prefix}{y}年", "size": "xs", "weight": "bold", "color": "#1F2937", "flex": 4},
-                            {"type": "box", "layout": "vertical", "backgroundColor": bg_color, "cornerRadius": "sm", "paddingStart": "6px", "paddingEnd": "6px", "paddingTop": "2px", "paddingBottom": "2px", "contents": [{"type": "text", "text": r_name, "size": "xxs", "weight": "bold", "color": text_color}]},
-                            {"type": "text", "text": f"（{status}）", "size": "xxs", "color": "#6B7280", "margin": "sm", "flex": 4}
-                        ]
-                    })
-                return risk_boxes
-            except: pass
-    return [{"type": "text", "text": "• 尚無風險等級紀錄", "size": "xs", "color": "#9CA3AF"}]
+            return str(raw).strip()
+    return ""
 
+def build_risk_history_boxes(group_records: list):
+    """將 risk_history JSON 解析為 Flex Message 垂直結構元件"""
+    risk_history_raw = extract_valid_risk_json(group_records)
+
+    if not risk_history_raw:
+        return [{
+            "type": "text",
+            "text": "• 尚無 2010～2026 公告風險等級紀錄",
+            "size": "xs",
+            "color": "#9CA3AF"
+        }]
+
+    try:
+        r_list = json.loads(risk_history_raw)
+        if not r_list:
+            return [{
+                "type": "text",
+                "text": "• 尚無 2010～2026 公告風險等級紀錄",
+                "size": "xs",
+                "color": "#9CA3AF"
+            }]
+
+        sorted_asc = sorted(r_list, key=lambda x: x.get("year", 0))
+        change_records = []
+        prev_risk = None
+
+        for item in sorted_asc:
+            y = item.get("year")
+            r_val = str(item.get("risk", "")).strip()
+            if r_val and r_val.lower() not in ['nan', 'none', 'null', '']:
+                if prev_risk is None:
+                    change_records.append({"year": y, "risk": r_val, "status": "首次公告劃設"})
+                    prev_risk = r_val
+                elif r_val != prev_risk:
+                    change_records.append({"year": y, "risk": r_val, "status": "等級調整"})
+                    prev_risk = r_val
+
+        sorted_desc = sorted(change_records, key=lambda x: x["year"], reverse=True)
+
+        risk_boxes = []
+        for idx, item in enumerate(sorted_desc):
+            y = item["year"]
+            r_name = item["risk"]
+            status = item["status"]
+
+            if "高" in r_name:
+                bg_color, text_color = "#FEE2E2", "#991B1B"
+            elif "中" in r_name:
+                bg_color, text_color = "#FEF3C7", "#92400E"
+            elif "低" in r_name:
+                bg_color, text_color = "#DCFCE7", "#166534"
+            else:
+                bg_color, text_color = "#F3F4F6", "#374151"
+
+            prefix_tag = "🔸 [現況] " if idx == 0 and len(sorted_desc) > 1 else "🔹 "
+
+            row_box = {
+                "type": "box",
+                "layout": "horizontal",
+                "alignItems": "center",
+                "margin": "xs",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"{prefix_tag}{y}年",
+                        "size": "xs",
+                        "weight": "bold",
+                        "color": "#1F2937",
+                        "flex": 4
+                    },
+                    {
+                        "type": "box",
+                        "layout": "vertical",
+                        "backgroundColor": bg_color,
+                        "cornerRadius": "sm",
+                        "paddingStart": "6px",
+                        "paddingEnd": "6px",
+                        "paddingTop": "2px",
+                        "paddingBottom": "2px",
+                        "alignItems": "center",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": r_name,
+                                "size": "xxs",
+                                "weight": "bold",
+                                "color": text_color
+                            }
+                        ]
+                    },
+                    {
+                        "type": "text",
+                        "text": f"（{status}）",
+                        "size": "xxs",
+                        "color": "#6B7280",
+                        "margin": "sm",
+                        "flex": 4
+                    }
+                ]
+            }
+            risk_boxes.append(row_box)
+
+        return risk_boxes
+    except Exception as e:
+        return [{
+            "type": "text",
+            "text": f"• 風險等級解析異常: {e}",
+            "size": "xs",
+            "color": "#9CA3AF"
+        }]
+
+# -------------------------------------------------------------
+# 5. LINE Flex Message 視覺卡片構建
+# -------------------------------------------------------------
 def build_stream_flex_bubble(stream_id: str, group_records: list):
+    """建立聚合單一溪流之 Flex Message 卡片"""
     latest_rec = group_records[0]
-    cty, twn = latest_rec.get("county") or "", latest_rec.get("township") or ""
+    cty = latest_rec.get("county") or ""
+    twn = latest_rec.get("township") or ""
+    db_old = latest_rec.get("dbno_old") or ""
+    
+    # 整合涵蓋村里
     villages = set()
     for rec in group_records:
-        for v in rec.get("villages", []): villages.add(v)
+        for v in rec.get("villages", []):
+            villages.add(v)
     v_str = "、".join(sorted(villages)) if villages else "未標記村里"
+
+    # 最長/最新沿革
     adj = latest_rec.get("adjustments") or "無調整紀錄"
-    
+    for rec in group_records:
+        curr_adj = rec.get("adjustments") or ""
+        if len(curr_adj) > len(adj):
+            adj = curr_adj
+
+    # 提取所有調查年度
+    report_years = []
+    for rec in group_records:
+        yr = rec.get("year", 0)
+        if yr > 0:
+            report_years.append(f"{yr}年")
+    years_summary = "、".join(report_years) if report_years else "無紀錄"
+
+    # 1. 歷年風險等級異動元件
+    risk_history_boxes = build_risk_history_boxes(group_records)
+
+    # 2. 歷年重大災害情勢元件 (去重)
+    all_disasters = []
+    seen_events = set()
+    for rec in group_records:
+        for d in rec.get("disaster_history", []):
+            event_key = f"{d.get('year')}_{d.get('scale_and_damage') or d.get('description')}"
+            if event_key not in seen_events:
+                seen_events.add(event_key)
+                all_disasters.append(d)
+
+    disaster_boxes = []
+    if all_disasters:
+        for d in all_disasters[:6]:
+            yr = d.get("year", "歷史事件")
+            rf = d.get("rainfall_info", "")
+            dmg = d.get("scale_and_damage") or d.get("description", "無詳細災情紀錄")
+            
+            event_box = {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#F9FAFB",
+                "cornerRadius": "md",
+                "paddingAll": "8px",
+                "margin": "sm",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"🚨 {yr}",
+                        "weight": "bold",
+                        "size": "xs",
+                        "color": "#DC2626"
+                    }
+                ]
+            }
+            if rf and rf != "未載明":
+                event_box["contents"].append({
+                    "type": "text",
+                    "text": f"🌧️ 雨量：{rf}",
+                    "size": "xxs",
+                    "color": "#2563EB",
+                    "margin": "xs"
+                })
+            event_box["contents"].append({
+                "type": "text",
+                "text": dmg,
+                "size": "xs",
+                "color": "#374151",
+                "wrap": True,
+                "margin": "xs"
+            })
+            disaster_boxes.append(event_box)
+    else:
+        disaster_boxes.append({
+            "type": "text",
+            "text": "• 報告內無重大歷史災害紀錄",
+            "size": "xs",
+            "color": "#9CA3AF"
+        })
+
+    # 3. 歷年報告下載按鈕 (由新到舊排列)
     report_buttons = []
     for rec in group_records:
-        yr, fname, sgrp = rec.get("year"), rec.get("file_name"), rec.get("storage_group")
-        if fname:
-            # 透過自家的 /download 短網址包裝，避免 R2 預簽名網址過長導致 LINE 拒絕
-            encoded_fn = quote(str(fname))
-            encoded_sgrp = quote(determine_storage_group(str(fname), sgrp))
-            short_download_url = f"{BASE_URL}/download?file={encoded_fn}&group={encoded_sgrp}"
-            
+        yr = rec.get("year")
+        yr_label = f"{yr} 年報告" if yr > 0 else "調查報告"
+        fname = rec.get("file_name")
+        sgrp = rec.get("storage_group")
+        
+        dl_url = get_r2_download_url(fname, sgrp)
+        if dl_url:
             report_buttons.append({
-                "type": "button", 
+                "type": "button",
                 "action": {
-                    "type": "uri", 
-                    "label": f"📄 下載 {yr}年報告" if yr > 0 else "📄 下載報告", 
-                    "uri": short_download_url
-                }, 
-                "style": "primary", 
-                "color": "#2563EB" if yr >= 2016 else "#4B5563", 
-                "height": "sm", 
+                    "type": "uri",
+                    "label": f"📄 下載 {yr_label}",
+                    "uri": dl_url
+                },
+                "style": "primary",
+                "color": "#2563EB" if yr >= 2016 else "#4B5563",
+                "height": "sm",
                 "margin": "xs"
             })
 
+    header_title = f"{stream_id}" + (f" (舊:{db_old})" if db_old else "")
+
     bubble = {
-        "type": "bubble", "size": "mega",
-        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1E3A8A", "paddingAll": "14px", "contents": [
-            {"type": "text", "text": stream_id, "weight": "bold", "size": "lg", "color": "#FFFFFF"},
-            {"type": "text", "text": f"📍 {cty} {twn}（{v_str}）", "size": "xs", "color": "#E0E7FF", "margin": "xs"}
-        ]},
-        "body": {"type": "box", "layout": "vertical", "paddingAll": "14px", "contents": [
-            {"type": "text", "text": "📊 歷年風險等級異動歷程", "weight": "bold", "size": "sm", "color": "#111827"},
-            {"type": "box", "layout": "vertical", "backgroundColor": "#F8FAFC", "cornerRadius": "md", "paddingAll": "8px", "margin": "xs", "contents": build_risk_history_boxes(group_records)},
-            {"type": "separator", "margin": "md"},
-            {"type": "text", "text": "📐 劃設調整沿革", "weight": "bold", "size": "sm", "color": "#111827", "margin": "md"},
-            {"type": "text", "text": adj, "size": "xs", "color": "#4B5563", "wrap": True, "margin": "xs"}
-        ]}
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1E3A8A",
+            "paddingAll": "14px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": header_title,
+                    "weight": "bold",
+                    "size": "lg",
+                    "color": "#FFFFFF"
+                },
+                {
+                    "type": "text",
+                    "text": f"📍 {cty} {twn}（{v_str}）",
+                    "size": "xs",
+                    "color": "#E0E7FF",
+                    "margin": "xs"
+                },
+                {
+                    "type": "text",
+                    "text": f"📅 調查年度：{years_summary}（共 {len(group_records)} 份）",
+                    "size": "xxs",
+                    "color": "#CBD5E1",
+                    "margin": "xs"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "14px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📊 歷年風險等級異動歷程",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#111827"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": "#F8FAFC",
+                    "cornerRadius": "md",
+                    "paddingAll": "8px",
+                    "margin": "xs",
+                    "contents": risk_history_boxes
+                },
+                {"type": "separator", "margin": "md"},
+                {
+                    "type": "text",
+                    "text": "📐 劃設調整沿革",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#111827",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": adj,
+                    "size": "xs",
+                    "color": "#4B5563",
+                    "wrap": True,
+                    "margin": "xs"
+                },
+                {"type": "separator", "margin": "md"},
+                {
+                    "type": "text",
+                    "text": "🕒 歷年重大災害情勢",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#111827",
+                    "margin": "md"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": disaster_boxes,
+                    "margin": "xs"
+                }
+            ]
+        }
     }
+
     if report_buttons:
-        bubble["footer"] = {"type": "box", "layout": "vertical", "paddingAll": "12px", "contents": [{"type": "text", "text": "📚 調查報告下載", "weight": "bold", "size": "xs", "color": "#2563EB"}, *report_buttons]}
+        bubble["footer"] = {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "12px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📚 歷年調查報告下載",
+                    "weight": "bold",
+                    "size": "xs",
+                    "color": "#2563EB",
+                    "margin": "none"
+                },
+                *report_buttons,
+                {
+                    "type": "text",
+                    "text": "⚡ 連結有效期限 15 分鐘",
+                    "size": "xxs",
+                    "color": "#94A3B8",
+                    "align": "center",
+                    "margin": "sm"
+                }
+            ]
+        }
+
     return bubble
 
 # -------------------------------------------------------------
-# 4. FastAPI 路由與 Webhook 處理 (雙模組智慧判斷)
+# 6. FastAPI 路由與 Webhook 處理 (含防休眠與告警)
 # -------------------------------------------------------------
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "Debris Flow LineBot Agent with Rainfall"}
+    """UptimeRobot 每 5 分鐘 Ping 喚醒端點"""
+    return {"status": "ok", "service": "Debris Flow LineBot Server (Active)"}
+
+@app.post("/uptime-alert")
+async def uptime_alert(request: Request):
+    """接收 UptimeRobot 斷線與復原告警並主動發送 LINE Push 通知給維護人員"""
+    try:
+        data = await request.json()
+        monitor_name = data.get("monitorFriendlyName", "土石流 LineBot 服務")
+        alert_type = data.get("alertTypeFriendlyName", "狀態警示")
+        details = data.get("alertDetails", "")
+        
+        status_icon = "🚨 【伺服器斷線告警】" if alert_type == "Down" else "✅ 【伺服器已恢復正常】"
+        msg_text = f"{status_icon}\n\n📌 監控服務：{monitor_name}\n⚠️ 當前狀態：{alert_type}\n🕒 詳情：{details}\n\n請維護人員留意系統狀態。"
+
+        if ADMIN_LINE_USER_ID and CHANNEL_ACCESS_TOKEN:
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=ADMIN_LINE_USER_ID,
+                        messages=[TextMessage(text=msg_text)]
+                    )
+                )
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"❌ 告警推播發送失敗: {e}")
+        return {"status": "error"}
 
 @app.post("/callback")
 async def handle_callback(request: Request, x_line_signature: str = Header(None)):
@@ -215,100 +560,101 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
         raise HTTPException(status_code=400, detail="Missing X-Line-Signature")
 
     body = await request.body()
-    body_str = body.decode("utf-8")
-    
+    body_text = body.decode("utf-8")
+
     try:
-        events = parser.parse(body_str, x_line_signature)
+        events = parser.parse(body_text, x_line_signature)
     except InvalidSignatureError:
         raise HTTPException(status_code=400, detail="Invalid signature.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+
+    # 🟢 關鍵修正 1：若為 Verify 空事件，立即秒回 200，杜絕 Timeout
+    if not events:
+        return Response(content="OK", status_code=status.HTTP_200_OK)
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         for event in events:
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 user_text = event.message.text.strip()
-                parts = user_text.split()
                 
-                messages_to_reply = []
                 try:
-                    # 1. 查詢 Turso 資料庫 (取得完整的調查卡片、風險歷程、劃設沿革與 PDF 下載)
-                    search_query = parts[0] if len(parts) > 1 and "DF" in parts[0] else user_text
-                    raw_records = query_turso_db(search_query)
+                    # 查詢 Turso 資料庫 (10 欄位)
+                    raw_records = query_turso_db(user_text)
 
-                    if not raw_records and search_query != user_text:
-                        raw_records = query_turso_db(user_text)
-
-                    target_stream_id = None
-                    if raw_records:
+                    if not raw_records:
+                        reply_msg = TextMessage(
+                            text=f"🔍 查詢關鍵字：「{user_text}」\n\n"
+                                 "⚠️ 查無相符的土石流潛勢溪流紀錄。\n"
+                                 "💡 建議輸入：\n"
+                                 "• 現行編號 (如：中市DF004、投縣DF135)\n"
+                                 "• 前期舊編號 (如：宜蘭A089、花縣U113-1)\n"
+                                 "• 鄉鎮村里 (如：和平區、達觀里、竹山鎮)"
+                        )
+                    else:
                         grouped_streams = defaultdict(list)
                         for r in raw_records:
-                            # 確保安全解構所有欄位 (包含舊編號 db_old)
-                            sid, cty, twn, v_raw, h_raw, adj, fname, s_grp, r_hist, db_old = r if len(r) >= 10 else (*r, "")
-                            v_list = json.loads(v_raw) if v_raw and str(v_raw).startswith("[") else []
-                            h_list = json.loads(h_raw) if h_raw and str(h_raw).startswith("[") else []
+                            sid = r[0] or ""
+                            cty = r[1] or ""
+                            twn = r[2] or ""
+                            v_raw = r[3] or ""
+                            h_raw = r[4] or ""
+                            adj = r[5] or "無調整紀錄"
+                            fname = r[6] or ""
+                            s_grp = r[7] or ""
+                            r_hist = r[8] or ""
+                            db_old = r[9] if len(r) > 9 else ""
+
+                            v_list = json.loads(v_raw) if str(v_raw).startswith("[") else []
+                            h_list = json.loads(h_raw) if str(h_raw).startswith("[") else []
                             yr = parse_report_year(fname)
-                            stream_key = sid.strip() if sid else f"{cty}{twn}未編號"
+                            
+                            stream_key = sid.strip() if sid.strip() else f"{cty}{twn}未編號"
                             grouped_streams[stream_key].append({
-                                "stream_id": sid, "county": cty, "township": twn, "villages": v_list,
-                                "disaster_history": h_list, "adjustments": adj, "file_name": fname,
-                                "storage_group": s_grp, "risk_history": r_hist, "year": yr, "dbno_old": db_old
+                                "stream_id": sid,
+                                "county": cty,
+                                "township": twn,
+                                "villages": v_list,
+                                "disaster_history": h_list,
+                                "adjustments": adj,
+                                "file_name": fname,
+                                "storage_group": s_grp,
+                                "risk_history": r_hist,
+                                "dbno_old": db_old,
+                                "year": yr
                             })
 
-                        bubbles = []
-                        for sid_key, recs in list(grouped_streams.items())[:3]: # 限制最多 3 個卡片避免超過 LINE 上限
-                            recs.sort(key=lambda x: x["year"], reverse=True)
-                            bubbles.append(build_stream_flex_bubble(sid_key, recs))
-                            if not target_stream_id:
-                                target_stream_id = sid_key
+                        # 🟢 關鍵修正 2：Flex 封裝失敗時自動降級純文字，杜絕已讀不回
+                        try:
+                            bubbles = []
+                            for sid_key, recs in list(grouped_streams.items())[:5]:
+                                recs.sort(key=lambda x: x["year"], reverse=True)
+                                bubble = build_stream_flex_bubble(sid_key, recs)
+                                bubbles.append(bubble)
 
-                        flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
-                        
-                        # 【重要】將原本的 Flex 視覺卡片（含風險歷程、沿革、PDF 下載按鈕）加入回覆清單
-                        messages_to_reply.append(
-                            FlexMessage(
-                                alt_text=f"⛰️ 找到 {len(grouped_streams)} 條相關潛勢溪流調查資料",
+                            flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
+                            reply_msg = FlexMessage(
+                                alt_text=f"⛰️ 找到 {len(grouped_streams)} 條「{user_text}」相關潛勢溪流調查資料",
                                 contents=FlexContainer.from_json(json.dumps(flex_payload))
                             )
+                        except Exception as flex_err:
+                            print(f"⚠️ Flex Message 封裝異常，啟動降級文字模式: {flex_err}")
+                            fallback_lines = [f"⛰️ 查詢「{user_text}」成果（共 {len(grouped_streams)} 條）：\n"]
+                            for s_k, r_list in list(grouped_streams.items())[:3]:
+                                first_r = r_list[0]
+                                db_old_txt = f" (舊: {first_r.get('dbno_old')})" if first_r.get('dbno_old') else ""
+                                fallback_lines.append(f"📌 【{s_k}】{db_old_txt} {first_r['county']}{first_r['township']}")
+                                fallback_lines.append(f"• 歷年報告：共 {len(r_list)} 份")
+                                fallback_lines.append(f"• 沿革：{first_r['adjustments'][:60]}...\n")
+                            fallback_lines.append("💡 建議前往網頁決策平台查閱完整圖表與 PDF 下載。")
+                            reply_msg = TextMessage(text="\n".join(fallback_lines))
+
+                    line_bot_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[reply_msg]
                         )
+                    )
+                except Exception as proc_err:
+                    print(f"❌ 訊息處理流程異常: {proc_err}")
 
-                    # 2. 判斷並附加歷史雨量統計文字
-                    debris_no_candidate = None
-                    event_kw = None
-                    
-                    if len(parts) > 0 and "DF" in parts[0]:
-                        debris_no_candidate = parts[0]
-                        event_kw = parts[1] if len(parts) > 1 else None
-                    elif target_stream_id and len(parts) > 1:
-                        debris_no_candidate = target_stream_id
-                        event_kw = parts[1]
-                    elif target_stream_id and not messages_to_reply:
-                        debris_no_candidate = target_stream_id
-
-                    if debris_no_candidate:
-                        rain_result_md = rain_agent.execute_query(debris_no_candidate, event_kw)
-                        messages_to_reply.append(TextMessage(text=rain_result_md))
-
-                    # 3. 若兩者皆無結果，回傳友善提示
-                    if not messages_to_reply:
-                        reply_text = (
-                            f"🔍 查詢關鍵字：「{user_text}」\n\n"
-                            "⚠️ 查無相符的潛勢溪流調查或雨量紀錄。\n"
-                            "💡 建議輸入：\n"
-                            "• 溪流編號與事件 (如：屏縣DF022 莫拉克)\n"
-                            "• 鄉鎮村里 (如：泰武鄉佳平村、和平區)"
-                        )
-                        messages_to_reply.append(TextMessage(text=reply_text))
-
-                except Exception as inner_e:
-                    print(f"❌ [LineBot 處理查詢發生錯誤]: {inner_e}")
-                    messages_to_reply = [TextMessage(text=f"⚠️ 系統處理發生錯誤：{str(inner_e)}")]
-
-                try:
-                    # LINE 最多一次回發 5 則訊息，此處取前 5 則（通常為 1 個 Flex 卡片 + 1 個雨量文字）
-                    line_bot_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=messages_to_reply[:5]))
-                except Exception as reply_e:
-                    print(f"❌ [LineBot 回覆發送失敗]: {reply_e}")
-
-    return "OK"
+    return Response(content="OK", status_code=status.HTTP_200_OK)
