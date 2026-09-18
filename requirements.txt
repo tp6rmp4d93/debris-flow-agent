@@ -16,3 +16,5 @@ pandas
 google-genai
 openpyxl
 httpx
+botocore
+libsql-experimental
