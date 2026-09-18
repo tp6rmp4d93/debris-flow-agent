@@ -320,8 +320,24 @@ def build_risk_history_boxes(group_records: list):
 # -------------------------------------------------------------
 # 5. 【土石流潛勢溪流雨量查詢結果】專屬 Flex 卡片
 # -------------------------------------------------------------
+def format_duration_rainfall(raw_stats) -> str:
+    """
+    格式化降雨延時統計 (支援 dict 或 字串)
+    例如: {"1h": 85, "3h": 180, "6h": 320, "24h": 1150} -> "1h: 85mm | 3h: 180mm | 6h: 320mm | 24h: 1150mm"
+    """
+    if not raw_stats:
+        return ""
+    if isinstance(raw_stats, dict):
+        items = []
+        for k, v in raw_stats.items():
+            if str(v).strip() and str(v).lower() not in ["none", "nan", "null"]:
+                unit = "mm" if not str(v).endswith("mm") else ""
+                items.append(f"{k}: {v}{unit}")
+        return " ｜ ".join(items)
+    return str(raw_stats).strip()
+
 def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw: str = ""):
-    """專屬雨量與警戒降雨查詢結果圖卡"""
+    """專屬雨量、參考雨量站、延時降雨統計與比較事件查詢結果圖卡"""
     latest_rec = group_records[0]
     cty = latest_rec.get("county") or ""
     twn = latest_rec.get("township") or ""
@@ -333,7 +349,7 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
             villages.add(v)
     v_str = "、".join(sorted(villages)) if villages else "未標記村里"
 
-    # 彙整所有致災事件
+    # 彙整所有致災事件 (去重)
     all_disasters = []
     seen_events = set()
     for rec in group_records:
@@ -343,7 +359,7 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
                 seen_events.add(event_key)
                 all_disasters.append(d)
 
-    # 篩選特定關鍵字 (例如 莫拉克)
+    # 針對使用者輸入事件篩選 (例如: 莫拉克)
     if filter_kw:
         matched = [d for d in all_disasters if filter_kw.lower() in json.dumps(d, ensure_ascii=False).lower()]
         if matched:
@@ -351,64 +367,135 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
 
     rain_items = []
     if all_disasters:
-        for d in all_disasters[:8]:
-            yr = d.get("year", "歷史降雨事件")
-            rf = d.get("rainfall_info", "")
-            dmg = d.get("scale_and_damage") or d.get("description", "無詳細災況紀錄")
+        for d in all_disasters[:6]:
+            yr = d.get("year") or d.get("event_name") or "歷史降雨事件"
+            rf = d.get("rainfall_info") or d.get("rainfall") or ""
+            dmg = d.get("scale_and_damage") or d.get("description") or "無詳細災況紀錄"
+            
+            # 1. 參考雨量站 (彈性抓取各類命名)
+            station = (
+                d.get("station_name") or 
+                d.get("ref_station") or 
+                d.get("rain_station") or 
+                d.get("station") or ""
+            )
+            st_id = d.get("station_id") or ""
+            station_text = f"{station} ({st_id})" if (station and st_id) else (station or st_id or "")
+
+            # 2. 降雨延時雨量統計 (1h, 3h, 6h, 12h, 24h 等)
+            duration_stats = format_duration_rainfall(
+                d.get("duration_stats") or 
+                d.get("duration_rainfall") or 
+                d.get("duration") or 
+                d.get("rainfall_duration") or ""
+            )
+
+            # 3. 比較事件
+            comp_event = (
+                d.get("comparison_events") or 
+                d.get("compare_event") or 
+                d.get("comparison") or 
+                d.get("similar_events") or ""
+            )
 
             contents = [
                 {
                     "type": "text",
                     "text": f"🌧️ {yr}",
                     "weight": "bold",
-                    "size": "xs",
+                    "size": "sm",
                     "color": "#1E40AF"
                 }
             ]
 
+            # 參考雨量站
+            if station_text and station_text.lower() not in ["未載明", "none", "null", ""]:
+                contents.append({
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "xs",
+                    "contents": [
+                        {"type": "text", "text": "📍 參考雨量站：", "size": "xxs", "color": "#64748B", "flex": 3},
+                        {"type": "text", "text": station_text, "size": "xxs", "color": "#0F172A", "weight": "bold", "flex": 7}
+                    ]
+                })
+
+            # 降雨概要
             if rf and rf not in ["未載明", "none", "null", ""]:
                 contents.append({
                     "type": "box",
+                    "layout": "horizontal",
+                    "margin": "xs",
+                    "contents": [
+                        {"type": "text", "text": "💧 降雨量概況：", "size": "xxs", "color": "#64748B", "flex": 3},
+                        {"type": "text", "text": rf, "size": "xxs", "color": "#2563EB", "weight": "bold", "wrap": True, "flex": 7}
+                    ]
+                })
+
+            # 降雨延時雨量統計
+            if duration_stats and duration_stats.lower() not in ["未載明", "none", "null", ""]:
+                contents.append({
+                    "type": "box",
                     "layout": "vertical",
-                    "backgroundColor": "#DBEAFE",
+                    "backgroundColor": "#EFF6FF",
                     "cornerRadius": "sm",
                     "paddingAll": "6px",
-                    "margin": "xs",
+                    "margin": "sm",
                     "contents": [
                         {
                             "type": "text",
-                            "text": f"致災降雨數據：{rf}",
-                            "size": "xs",
-                            "color": "#1E3A8A",
-                            "weight": "bold",
-                            "wrap": True
+                            "text": "⏱️ 降雨延時統計：",
+                            "size": "xxs",
+                            "color": "#1E40AF",
+                            "weight": "bold"
+                        },
+                        {
+                            "type": "text",
+                            "text": duration_stats,
+                            "size": "xxs",
+                            "color": "#1D4ED8",
+                            "wrap": True,
+                            "margin": "xs"
                         }
                     ]
                 })
-            else:
+
+            # 比較事件
+            if comp_event and comp_event.lower() not in ["未載明", "none", "null", "無", ""]:
                 contents.append({
-                    "type": "text",
-                    "text": "• 調查報告未載明詳細時/累積雨量數據",
-                    "size": "xxs",
-                    "color": "#94A3B8",
-                    "margin": "xs"
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "xs",
+                    "contents": [
+                        {"type": "text", "text": "🔄 比較事件：", "size": "xxs", "color": "#B45309", "flex": 3},
+                        {"type": "text", "text": str(comp_event), "size": "xxs", "color": "#92400E", "wrap": True, "flex": 7}
+                    ]
                 })
 
+            # 災況與規模說明
             contents.append({
-                "type": "text",
-                "text": f"災況規模：{dmg}",
-                "size": "xs",
-                "color": "#374151",
-                "wrap": True,
-                "margin": "xs"
+                "type": "box",
+                "layout": "vertical",
+                "margin": "sm",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"⚠️ 災情規模：{dmg}",
+                        "size": "xs",
+                        "color": "#334155",
+                        "wrap": True
+                    }
+                ]
             })
 
             rain_items.append({
                 "type": "box",
                 "layout": "vertical",
                 "backgroundColor": "#F8FAFC",
+                "borderColor": "#E2E8F0",
+                "borderWidth": "1px",
                 "cornerRadius": "md",
-                "paddingAll": "8px",
+                "paddingAll": "10px",
                 "margin": "sm",
                 "contents": contents
             })
@@ -417,7 +504,7 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
             "type": "text",
             "text": f"• 無符合「{filter_kw}」之雨量與致災降雨紀錄" if filter_kw else "• 報告內無重大致災降雨紀錄",
             "size": "xs",
-            "color": "#94A3B8"
+            "color": "#9CA3AF"
         })
 
     header_title = f"{stream_id}" + (f" (舊:{db_old})" if db_old else "")
@@ -462,7 +549,7 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
             "contents": [
                 {
                     "type": "text",
-                    "text": f"📊 歷史重大致災降雨一覽" + (f"（事件：{filter_kw}）" if filter_kw else ""),
+                    "text": f"📊 歷史重大致災降雨與延時統計" + (f"（事件：{filter_kw}）" if filter_kw else ""),
                     "weight": "bold",
                     "size": "sm",
                     "color": "#0F172A"
@@ -476,7 +563,7 @@ def build_rainfall_result_bubble(stream_id: str, group_records: list, filter_kw:
                 {"type": "separator", "margin": "md"},
                 {
                     "type": "text",
-                    "text": "💡 提示：降雨警戒值為即時研判指標，如需綜合調查報告，可直接輸入溪流編號查詢。",
+                    "text": "💡 提示：如需完整圖表或歷年調查 PDF，可直接輸入溪流編號調閱。",
                     "size": "xxs",
                     "color": "#64748B",
                     "wrap": True,
@@ -870,11 +957,16 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                                 fallback_lines.append(f"📌 【{s_k}】{db_old_txt} {first_r['county']}{first_r['township']}")
                                 fallback_lines.append(f"• 歷年報告：共 {len(r_list)} 份")
                                 
-                                # 優先輸出降雨資訊
                                 for d in first_r.get("disaster_history", [])[:3]:
-                                    yr_t = d.get("year", "")
-                                    rf_t = f" (雨量: {d.get('rainfall_info')})" if d.get('rainfall_info') else ""
-                                    fallback_lines.append(f"• 🚨 {yr_t}{rf_t}")
+                                    yr_t = d.get("year", "歷史事件")
+                                    rf_t = d.get("rainfall_info", "")
+                                    st_t = d.get("station_name") or d.get("ref_station", "")
+                                    comp_t = d.get("comparison_events") or d.get("compare_event", "")
+                                    
+                                    fallback_lines.append(f"\n🚨 {yr_t}")
+                                    if st_t: fallback_lines.append(f"  📍 參考雨量站: {st_t}")
+                                    if rf_t: fallback_lines.append(f"  💧 降雨量: {rf_t}")
+                                    if comp_t: fallback_lines.append(f"  🔄 比較事件: {comp_t}")
                             reply_msg = TextMessage(text="\n".join(fallback_lines))
 
                     line_bot_api.reply_message(
