@@ -35,7 +35,7 @@ CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 BASE_URL = os.getenv("RENDER_EXTERNAL_URL", "https://debris-flow-linebot.onrender.com")
-ADMIN_LINE_USER_ID = os.getenv("ADMIN_LINE_USER_ID", "")  # 維護人員 LINE ID
+ADMIN_LINE_USER_ID = os.getenv("ADMIN_LINE_USER_ID", "tp6rmp4d93")  # 維護人員 LINE ID
 
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     print("⚠️ 警告: 請設定 LINE_CHANNEL_ACCESS_TOKEN 與 LINE_CHANNEL_SECRET 環境變數。")
