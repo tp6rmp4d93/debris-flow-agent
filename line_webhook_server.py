@@ -736,6 +736,10 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
 # -------------------------------------------------------------
 # 7. FastAPI 路由與 Webhook 處理 (含防休眠與告警)
 # -------------------------------------------------------------
+@app.api_route("/", methods=["GET", "HEAD"])
+def health_check():
+    """供 Render 系統與 UptimeRobot 定時 Ping 喚醒端點 (支援 GET 與 HEAD)"""
+    return {"status": "ok", "service": "Debris Flow LineBot Server (Active)"}
 @app.get("/")
 def health_check():
     """UptimeRobot 每 5 分鐘 Ping 喚醒端點"""
