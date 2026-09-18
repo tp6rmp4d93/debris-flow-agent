@@ -30,7 +30,7 @@ CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
-ADMIN_LINE_USER_ID = os.getenv("ADMIN_LINE_USER_ID", "")  # 維護人員 LINE ID (U開頭33碼)
+ADMIN_LINE_USER_ID = os.getenv("ADMIN_LINE_USER_ID", "")
 
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     print("⚠️ 警告: 請設定 LINE_CHANNEL_ACCESS_TOKEN 與 LINE_CHANNEL_SECRET 環境變數。")
@@ -65,7 +65,7 @@ def determine_storage_group(file_name: str, storage_group: str) -> str:
     return "R2_GRP_3"
 
 def get_r2_download_url(file_name: str, storage_group: str) -> str:
-    """生成 15 分鐘有效的 R2 預簽名下載 URL (支援中文檔名編碼)"""
+    """生成 15 分鐘有效的 R2 預簽名下載 URL"""
     if not file_name:
         return ""
 
@@ -136,7 +136,7 @@ def parse_user_input(user_input: str):
     return main_term, sub_filter
 
 def query_turso_db(keyword: str):
-    """查詢相符的溪流調查紀錄 (最多撈取 15 筆做聚合)"""
+    """查詢相符的溪流調查紀錄"""
     if not TURSO_URL or not TURSO_TOKEN or not keyword:
         return []
 
@@ -189,7 +189,6 @@ def query_turso_db(keyword: str):
 # 4. 解析與建構風險等級異動歷程 (垂直條列・手機友善)
 # -------------------------------------------------------------
 def extract_valid_risk_json(group_records: list) -> str:
-    """從溪流多份報告中獲取有效的 risk_history JSON"""
     for rec in group_records:
         raw = rec.get("risk_history")
         if raw and str(raw).strip().startswith("[") and str(raw).strip() != "[]":
@@ -197,7 +196,6 @@ def extract_valid_risk_json(group_records: list) -> str:
     return ""
 
 def build_risk_history_boxes(group_records: list):
-    """將 risk_history JSON 解析為 Flex Message 垂直結構元件"""
     risk_history_raw = extract_valid_risk_json(group_records)
 
     if not risk_history_raw:
@@ -308,10 +306,185 @@ def build_risk_history_boxes(group_records: list):
         }]
 
 # -------------------------------------------------------------
-# 5. LINE Flex Message 視覺卡片構建
+# 5. 【土石流潛勢溪流雨量查詢結果】專屬 Flex 產生器
 # -------------------------------------------------------------
-def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str = ""):
-    """建立聚合單一溪流之 Flex Message 卡片"""
+def build_rainfall_query_bubble(stream_id: str, group_records: list, filter_kw: str = ""):
+    """專門建立【土石流潛勢溪流雨量查詢結果】的視覺化 Flex 卡片"""
+    latest_rec = group_records[0]
+    cty = latest_rec.get("county") or ""
+    twn = latest_rec.get("township") or ""
+    db_old = latest_rec.get("dbno_old") or ""
+
+    villages = set()
+    for rec in group_records:
+        for v in rec.get("villages", []):
+            villages.add(v)
+    v_str = "、".join(sorted(villages)) if villages else "未標記村里"
+
+    # 彙整歷史重大災害與雨量數據
+    all_disasters = []
+    seen_events = set()
+    for rec in group_records:
+        for d in rec.get("disaster_history", []):
+            event_key = f"{d.get('year')}_{d.get('scale_and_damage') or d.get('description')}"
+            if event_key not in seen_events:
+                seen_events.add(event_key)
+                all_disasters.append(d)
+
+    # 若指定關鍵字（如：莫拉克），優先進行特定事件篩選
+    clean_filter = filter_kw.replace("雨量", "").strip()
+    if clean_filter:
+        matched = [d for d in all_disasters if clean_filter.lower() in json.dumps(d, ensure_ascii=False).lower()]
+        if matched:
+            all_disasters = matched
+
+    # 組裝歷史致災雨量紀錄列表
+    rainfall_event_boxes = []
+    if all_disasters:
+        for d in all_disasters[:8]:
+            yr = d.get("year", "歷史災害事件")
+            rf = str(d.get("rainfall_info", "")).strip()
+            dmg = d.get("scale_and_damage") or d.get("description", "無災情紀錄")
+
+            # 雨量標示
+            has_rf = rf and rf.lower() not in ["未載明", "none", "null", ""]
+            rf_text = rf if has_rf else "未載明具體雨量數據"
+            rf_color = "#1D4ED8" if has_rf else "#64748B"
+            rf_bg = "#EFF6FF" if has_rf else "#F1F5F9"
+
+            box_contents = [
+                {
+                    "type": "text",
+                    "text": f"🌧️ {yr}",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#1E3A8A"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": rf_bg,
+                    "cornerRadius": "sm",
+                    "paddingAll": "6px",
+                    "margin": "xs",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": f"降雨觀測：{rf_text}",
+                            "size": "xs",
+                            "color": rf_color,
+                            "weight": "bold",
+                            "wrap": True
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": f"災情概要：{dmg}",
+                    "size": "xs",
+                    "color": "#374151",
+                    "wrap": True,
+                    "margin": "xs"
+                }
+            ]
+
+            rainfall_event_boxes.append({
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#FFFFFF",
+                "borderColor": "#E2E8F0",
+                "borderWidth": "1px",
+                "cornerRadius": "md",
+                "paddingAll": "10px",
+                "margin": "sm",
+                "contents": box_contents
+            })
+    else:
+        rainfall_event_boxes.append({
+            "type": "text",
+            "text": f"• 無查獲「{clean_filter}」相關之歷史致災雨量紀錄" if clean_filter else "• 本溪流歷年調查報告無歷史致災雨量紀錄",
+            "size": "xs",
+            "color": "#94A3B8"
+        })
+
+    header_title = f"{stream_id}" + (f" (舊:{db_old})" if db_old else "")
+
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#0284C7",
+            "paddingAll": "14px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "【土石流潛勢溪流雨量查詢結果】",
+                    "weight": "bold",
+                    "size": "xs",
+                    "color": "#E0F2FE"
+                },
+                {
+                    "type": "text",
+                    "text": header_title,
+                    "weight": "bold",
+                    "size": "lg",
+                    "color": "#FFFFFF",
+                    "margin": "xs"
+                },
+                {
+                    "type": "text",
+                    "text": f"📍 {cty} {twn}（{v_str}）",
+                    "size": "xs",
+                    "color": "#F0F9FF",
+                    "margin": "xs"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "14px",
+            "backgroundColor": "#F8FAFC",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"📊 歷史重大致災降雨與事件" + (f"（關鍵字：{clean_filter}）" if clean_filter else ""),
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#0F172A"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": rainfall_event_boxes,
+                    "margin": "sm"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "10px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "💡 提示：輸入單純溪流編號可查看劃設調整沿革與完整報告下載",
+                    "size": "xxs",
+                    "color": "#64748B",
+                    "align": "center"
+                }
+            ]
+        }
+    }
+    return bubble
+
+# -------------------------------------------------------------
+# 6. 一般潛勢溪流綜合 Flex Message 卡片構建
+# -------------------------------------------------------------
+def build_stream_flex_bubble(stream_id: str, group_records: list):
+    """建立聚合單一溪流之綜合 Flex Message 卡片 (基本資訊、沿革、風險歷程、下載)"""
     latest_rec = group_records[0]
     cty = latest_rec.get("county") or ""
     twn = latest_rec.get("township") or ""
@@ -343,15 +516,9 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                 seen_events.add(event_key)
                 all_disasters.append(d)
 
-    # 針對輸入之指定事件關鍵字進行過濾優先展示
-    if filter_kw:
-        matched_d = [d for d in all_disasters if filter_kw.lower() in json.dumps(d, ensure_ascii=False).lower()]
-        if matched_d:
-            all_disasters = matched_d
-
     disaster_boxes = []
     if all_disasters:
-        for d in all_disasters[:6]:
+        for d in all_disasters[:4]:
             yr = d.get("year", "歷史事件")
             rf = d.get("rainfall_info", "")
             dmg = d.get("scale_and_damage") or d.get("description", "無詳細災情紀錄")
@@ -365,8 +532,6 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                     "color": "#DC2626"
                 }
             ]
-            
-            # 顯著標記致災雨量
             if rf and rf not in ["未載明", "none", "null", ""]:
                 box_contents.append({
                     "type": "box",
@@ -386,7 +551,6 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                         }
                     ]
                 })
-                
             box_contents.append({
                 "type": "text",
                 "text": dmg,
@@ -395,8 +559,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                 "wrap": True,
                 "margin": "xs"
             })
-            
-            event_box = {
+            disaster_boxes.append({
                 "type": "box",
                 "layout": "vertical",
                 "backgroundColor": "#F9FAFB",
@@ -404,12 +567,11 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                 "paddingAll": "8px",
                 "margin": "sm",
                 "contents": box_contents
-            }
-            disaster_boxes.append(event_box)
+            })
     else:
         disaster_boxes.append({
             "type": "text",
-            "text": f"• 無符合「{filter_kw}」之歷史災害或雨量紀錄" if filter_kw else "• 報告內無重大歷史災害紀錄",
+            "text": "• 報告內無重大歷史災害紀錄",
             "size": "xs",
             "color": "#9CA3AF"
         })
@@ -511,7 +673,7 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
                 {"type": "separator", "margin": "md"},
                 {
                     "type": "text",
-                    "text": f"🕒 歷年重大災害與雨量情勢" + (f"（已篩選：{filter_kw}）" if filter_kw else ""),
+                    "text": "🕒 歷年重大災害與雨量情勢",
                     "weight": "bold",
                     "size": "sm",
                     "color": "#111827",
@@ -556,16 +718,14 @@ def build_stream_flex_bubble(stream_id: str, group_records: list, filter_kw: str
     return bubble
 
 # -------------------------------------------------------------
-# 6. FastAPI 路由與 Webhook 處理 (含防休眠與告警)
+# 7. FastAPI 路由與 Webhook 處理 (含雨量專屬分流)
 # -------------------------------------------------------------
 @app.get("/")
 def health_check():
-    """UptimeRobot 每 5 分鐘 Ping 喚醒端點"""
     return {"status": "ok", "service": "Debris Flow LineBot Server (Active)"}
 
 @app.post("/uptime-alert")
 async def uptime_alert(request: Request):
-    """接收 UptimeRobot 斷線與復原告警並轉發 LINE Push Message"""
     try:
         data = await request.json()
         monitor_name = data.get("monitorFriendlyName", "土石流 LineBot 服務")
@@ -602,7 +762,6 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
     except InvalidSignatureError:
         raise HTTPException(status_code=400, detail="Invalid signature.")
 
-    # LINE Verify 測試快速通道：空事件秒回 200，避免 Timeout
     if not events:
         return Response(content="OK", status_code=status.HTTP_200_OK)
 
@@ -612,7 +771,8 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 user_text = event.message.text.strip()
                 
-                # 分離主查詢詞（如：高市DF053）與附帶事件詞（如：莫拉克）
+                # 辨識是否為「雨量 / 災害事件查詢」意圖
+                is_rainfall_intent = any(k in user_text for k in ["雨量", "雨", "颱風", "豪雨", "莫拉克", "蘇迪勒", "賀伯", "梅姬", "納莉", "海葵", "康芮"])
                 main_term, sub_filter = parse_user_input(user_text)
 
                 try:
@@ -625,7 +785,7 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                                  "💡 建議輸入：\n"
                                  "• 現行編號 (如：中市DF004、高市DF053)\n"
                                  "• 前期舊編號 (如：宜蘭A089、花縣U113-1)\n"
-                                 "• 溪流加事件 (如：高市DF053 莫拉克)\n"
+                                 "• 雨量專屬查詢 (如：高市DF053 雨量、高市DF053 莫拉克)\n"
                                  "• 鄉鎮村里 (如：和平區、達觀里、竹山鎮)"
                         )
                     else:
@@ -661,32 +821,45 @@ async def handle_callback(request: Request, x_line_signature: str = Header(None)
                                 "year": yr
                             })
 
-                        # 組裝 Flex Message，若失敗自動降級純文字
                         try:
                             bubbles = []
                             for sid_key, recs in list(grouped_streams.items())[:5]:
                                 recs.sort(key=lambda x: x["year"], reverse=True)
-                                bubble = build_stream_flex_bubble(sid_key, recs, filter_kw=sub_filter)
+                                
+                                # 依據使用者意圖動態分流呈現不同的 Flex 模板
+                                if is_rainfall_intent:
+                                    bubble = build_rainfall_query_bubble(sid_key, recs, filter_kw=sub_filter or user_text)
+                                else:
+                                    bubble = build_stream_flex_bubble(sid_key, recs)
                                 bubbles.append(bubble)
 
                             flex_payload = {"type": "carousel", "contents": bubbles} if len(bubbles) > 1 else bubbles[0]
+                            
+                            alt_title = "【土石流潛勢溪流雨量查詢結果】" if is_rainfall_intent else f"找到 {len(grouped_streams)} 條潛勢溪流資料"
                             reply_msg = FlexMessage(
-                                alt_text=f"⛰️ 找到 {len(grouped_streams)} 條「{user_text}」相關潛勢溪流調查資料",
+                                alt_text=f"🌧️ {alt_title} - {user_text}",
                                 contents=FlexContainer.from_json(json.dumps(flex_payload))
                             )
                         except Exception as flex_err:
-                            print(f"⚠️ Flex Message 異常，啟用降級模式: {flex_err}")
-                            fallback_lines = [f"⛰️ 查詢「{user_text}」成果：\n"]
+                            print(f"⚠️ Flex Message 異常，啟用純文字降級: {flex_err}")
+                            header_line = "🌧️ 【土石流潛勢溪流雨量查詢結果】\n" if is_rainfall_intent else f"⛰️ 查詢「{user_text}」成果：\n"
+                            fallback_lines = [header_line]
                             for s_k, r_list in list(grouped_streams.items())[:3]:
                                 first_r = r_list[0]
                                 db_old_txt = f" (舊: {first_r.get('dbno_old')})" if first_r.get('dbno_old') else ""
                                 fallback_lines.append(f"📌 【{s_k}】{db_old_txt} {first_r['county']}{first_r['township']}")
-                                fallback_lines.append(f"• 歷年報告：共 {len(r_list)} 份")
                                 
-                                for d in first_r.get("disaster_history", [])[:2]:
-                                    yr_t = d.get("year", "")
-                                    rf_t = f" (雨量: {d.get('rainfall_info')})" if d.get('rainfall_info') else ""
-                                    fallback_lines.append(f"• 🚨 {yr_t}{rf_t}")
+                                # 條列降雨與災害紀錄
+                                disasters = first_r.get("disaster_history", [])
+                                if disasters:
+                                    for d in disasters[:3]:
+                                        yr_t = d.get("year", "歷史災害")
+                                        rf_t = d.get("rainfall_info", "未載明雨量")
+                                        dmg_t = d.get("scale_and_damage") or d.get("description", "")
+                                        fallback_lines.append(f"• 🌧️ {yr_t}：{rf_t} | {dmg_t[:40]}")
+                                else:
+                                    fallback_lines.append("• 尚無歷史致災雨量紀錄")
+                                fallback_lines.append("")
                             reply_msg = TextMessage(text="\n".join(fallback_lines))
 
                     line_bot_api.reply_message(
