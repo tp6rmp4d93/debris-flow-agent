@@ -18,3 +18,4 @@ openpyxl
 httpx
 botocore
 libsql-experimental
+geopandas
