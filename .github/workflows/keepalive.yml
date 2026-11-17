@@ -1,0 +1,19 @@
+name: Keepalive Workflow
+
+on:
+  schedule:
+    # 每月 1 號 UTC 時間 00:00 執行
+    - cron: '0 0 1 * *'
+  workflow_dispatch: # 允許手動觸發測試
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必須賦予寫入權限才能進行 Commit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
+        with:
+          # 自訂 Commit 訊息
+          commit_message: "chore: keep workflow alive"
